@@ -1,0 +1,86 @@
+# DeepDistill — 多源内容深度蒸馏引擎
+# 项目元数据与依赖管理
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepdistill"
+version = "0.1.0"
+description = "多源内容深度蒸馏引擎 — 从视频/音频/图片/文档中提炼结构化知识"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Allen Xing"},
+]
+
+# 核心依赖（最小安装）
+dependencies = [
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "rich>=13.0",          # CLI 美化输出
+    "click>=8.0",          # CLI 框架
+]
+
+[project.optional-dependencies]
+# ASR 语音转文字
+asr = [
+    "faster-whisper>=1.0",
+    "ffmpeg-python>=0.2",
+]
+# OCR 图片文字提取
+ocr = [
+    "easyocr>=1.7",
+]
+# 文档提取
+doc = [
+    "PyPDF2>=3.0",
+    "python-docx>=1.0",
+    "python-pptx>=0.6",
+    "openpyxl>=3.1",
+    "beautifulsoup4>=4.12",
+    "trafilatura>=1.6",
+]
+# 视频分析
+video = [
+    "scenedetect>=0.6",
+    "ultralytics>=8.0",     # YOLOv8
+    "mediapipe>=0.10",
+]
+# AI 分析
+ai = [
+    "openai>=1.0",          # DeepSeek/Qwen 兼容 OpenAI 接口
+    "tiktoken>=0.5",        # Token 计数
+]
+# 全部功能
+all = [
+    "deepdistill[asr,ocr,doc,video,ai]",
+]
+# 开发工具
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+
+[project.scripts]
+deepdistill = "deepdistill.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["deepdistill*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
