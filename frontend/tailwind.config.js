@@ -65,6 +65,7 @@ module.exports = {
         'spin-slow': 'spin 2s linear infinite',
         'slide-up': 'slideUp 0.3s ease-out',
         'fade-in': 'fadeIn 0.2s ease-out',
+        'shimmer': 'shimmer 2s ease-in-out infinite',
       },
       keyframes: {
         slideUp: {
@@ -74,6 +75,10 @@ module.exports = {
         fadeIn: {
           '0%': { opacity: '0' },
           '100%': { opacity: '1' },
+        },
+        shimmer: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(100%)' },
         },
       },
     },

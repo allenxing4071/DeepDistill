@@ -21,19 +21,38 @@ ocr:
 
 # ── AI 分析 ──
 ai:
-  # 提供商：deepseek / qwen
-  provider: deepseek
-  # 模型名称
-  model: deepseek-chat
+  # 提供商：ollama（本地）/ deepseek / qwen
+  provider: ollama
+  # 模型名称（ollama 用 qwen3:8b，deepseek 用 deepseek-chat，qwen 用 qwen-max）
+  model: qwen3:8b
+  # fallback 链：主 provider 失败时依次尝试
+  fallback_providers:
+    - deepseek
+    - qwen
   # 短内容阈值（字符数），低于此值尝试用本地模型
   local_threshold: 2000
 
 # ── 视频分析 ──
 video_analysis:
   # 级别：off / basic / standard / full
-  level: off
+  # basic: 镜头切割 + 基础风格分析
+  # standard: + 场景识别 + 动作识别
+  # full: + 拍摄手法分析 + 转场检测
+  level: basic
 
 # ── 输出 ──
 output:
-  # 格式：markdown / json
+  # 格式：markdown / json / skill
   format: markdown
+
+# ── 导出 ──
+export:
+  google_docs:
+    # 是否启用 Google Docs 导出
+    enabled: true
+    # Google Drive 中存放结果的文件夹名
+    folder_name: "DeepDistill"
+    # OAuth2 凭据文件路径（从 Google Cloud Console 下载）
+    credentials_path: "config/google_credentials.json"
+    # Token 缓存路径（自动生成，无需手动创建）
+    token_path: "data/.google_token.json"

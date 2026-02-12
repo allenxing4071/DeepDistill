@@ -28,6 +28,7 @@ def format_json(result, output_dir: Path) -> str:
         "extracted_text": result.extracted_text,
         "ai_analysis": result.ai_result,
         "video_analysis": result.video_analysis,
+        "visual_assets": result.visual_assets if hasattr(result, 'visual_assets') else None,
         "metadata": {
             "processing_time_sec": result.processing_time_sec,
             "created_at": result.created_at,

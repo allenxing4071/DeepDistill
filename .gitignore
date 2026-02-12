@@ -36,6 +36,15 @@ models/
 *.onnx
 *.bin
 
+# Google OAuth 凭证与 Token（敏感信息，禁止入库）
+config/credentials.json
+config/token.json
+config/client_secret_*.json
+config/google_credentials.json
+
+# 运行时数据（Docker 卷挂载，不入库）
+data/
+
 # 临时文件与输出
 tmp/
 output/

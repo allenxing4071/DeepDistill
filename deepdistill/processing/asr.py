@@ -2,28 +2,38 @@
 ASR 处理器：视频/音频 → 文本
 使用 ffmpeg 提取音轨 + faster-whisper 转录。
 
+超时保护：
+- ffmpeg 提取音轨：最大 10 分钟（600 秒）
+- Whisper 转录：最大 30 分钟（1800 秒）
+
 依赖：pip install deepdistill[asr]
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
+import time
 from pathlib import Path
 
 logger = logging.getLogger("deepdistill.asr")
+
+# 超时配置（秒）
+FFMPEG_TIMEOUT = int(os.getenv("DEEPDISTILL_FFMPEG_TIMEOUT", "600"))       # 10 分钟
+TRANSCRIBE_TIMEOUT = int(os.getenv("DEEPDISTILL_TRANSCRIBE_TIMEOUT", "1800"))  # 30 分钟
 
 
 def transcribe(file_path: Path) -> str:
     """
     将视频/音频文件转录为文本。
-    1. ffmpeg 提取音轨 → WAV 16kHz mono
-    2. faster-whisper 转录
+    1. ffmpeg 提取音轨 → WAV 16kHz mono（超时 10 分钟）
+    2. faster-whisper 转录（超时 30 分钟）
     3. 合并所有片段为完整文本
     """
     from ..config import cfg
 
-    # 提取音轨
+    # 提取音轨（带超时）
     wav_path = _extract_audio(file_path)
 
     try:
@@ -45,8 +55,8 @@ def transcribe(file_path: Path) -> str:
             download_root=str(cfg.MODEL_CACHE_DIR),
         )
 
-        # 转录
-        logger.info(f"开始转录: {file_path.name}")
+        # 转录（带超时保护）
+        logger.info(f"开始转录: {file_path.name}（超时 {TRANSCRIBE_TIMEOUT}s）")
         segments, info = model.transcribe(
             str(wav_path),
             language=cfg.ASR_LANGUAGE,
@@ -56,13 +66,20 @@ def transcribe(file_path: Path) -> str:
 
         logger.info(f"检测语言: {info.language} (概率: {info.language_probability:.2f})")
 
-        # 合并片段
+        # 合并片段（带超时检查）
         texts = []
+        start_time = time.monotonic()
         for segment in segments:
             texts.append(segment.text.strip())
+            # 每处理一批片段检查超时
+            elapsed = time.monotonic() - start_time
+            if elapsed > TRANSCRIBE_TIMEOUT:
+                logger.warning(f"转录超时（{elapsed:.0f}s > {TRANSCRIBE_TIMEOUT}s），返回已转录部分")
+                break
 
         full_text = "\n".join(texts)
-        logger.info(f"转录完成: {len(full_text)} 字符")
+        elapsed = time.monotonic() - start_time
+        logger.info(f"转录完成: {len(full_text)} 字符，耗时 {elapsed:.1f}s")
         return full_text
 
     finally:
@@ -72,7 +89,7 @@ def transcribe(file_path: Path) -> str:
 
 
 def _extract_audio(file_path: Path) -> Path:
-    """使用 ffmpeg 提取音轨为 WAV 16kHz mono"""
+    """使用 ffmpeg 提取音轨为 WAV 16kHz mono（带超时保护）"""
     import subprocess
 
     # 如果已经是音频格式，直接返回
@@ -84,7 +101,7 @@ def _extract_audio(file_path: Path) -> Path:
     tmp.close()
     wav_path = Path(tmp.name)
 
-    logger.info(f"提取音轨: {file_path.name} → WAV")
+    logger.info(f"提取音轨: {file_path.name} → WAV（超时 {FFMPEG_TIMEOUT}s）")
     cmd = [
         "ffmpeg", "-i", str(file_path),
         "-ar", "16000",      # 采样率 16kHz
@@ -94,7 +111,14 @@ def _extract_audio(file_path: Path) -> Path:
         str(wav_path),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # 清理临时文件
+        if wav_path.exists():
+            wav_path.unlink()
+        raise RuntimeError(f"ffmpeg 提取音轨超时（>{FFMPEG_TIMEOUT}s），视频可能过大")
+
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg 提取音轨失败: {result.stderr[:500]}")
 

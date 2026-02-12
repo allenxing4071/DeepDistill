@@ -55,79 +55,105 @@ LOG_LEVEL=INFO
 
 ---
 
-## 二、生产环境信息
+## 二、生产环境信息（本机部署）
 
 ### 服务器
-- **阿里云**：`47.254.246.53`（与 KKline 共用同一台服务器）
-- **SSH**：`ssh -i ~/Documents/soft/KKline/deploy/LH.pem -p 2222 root@47.254.246.53`
-- **项目路径（服务器）**：`/opt/DeepDistill`
+- **本机 Mac**：`125.69.16.136`
+- **项目路径**：`~/Documents/soft/DeepDistill`
 
 ### 域名
 - **域名**：`deepdistill.kline007.top`
-- **DNS**：A 记录 → `47.254.246.53`
-- **HTTPS**：由 `tradedesk-nginx` 反代（需配置 SSL 证书）
+- **DNS**：A 记录 → `125.69.16.136`
+- **HTTPS**：由 `aitrader-nginx` 容器反代（AITRADER 项目统一管理）
+- **SSL 证书**：Let's Encrypt，由 `aitrader-certbot` 容器自动续期
+  - 证书路径：`AITRADER/nginx/ssl/deepdistill-fullchain.pem`
+  - 私钥路径：`AITRADER/nginx/ssl/deepdistill-privkey.pem`
+  - 有效期至：2026-05-13
 
-### 访问地址（规划）
+### Docker 容器
+| 服务 | 容器名 | 端口映射 | 说明 |
+|---|---|---|---|
+| 后端 | `deepdistill-backend` | `8006:8000` | FastAPI + 管线处理 |
+| 前端 | `deepdistill-ui` | `3006:3000` | Next.js Web UI |
+
+### 访问地址
 - Web UI：`https://deepdistill.kline007.top`
-- API：`https://deepdistill.kline007.top/api`
+- API：`https://deepdistill.kline007.top/api/`
+- API 文档：`https://deepdistill.kline007.top/docs`
 - 健康检查：`https://deepdistill.kline007.top/health`
+
+### Nginx 反代架构
+```
+用户 → aitrader-nginx:443 (HTTPS)
+       ├── deepdistill.kline007.top → host.docker.internal:3006 (前端)
+       ├── deepdistill.kline007.top/api/ → host.docker.internal:8006 (后端)
+       ├── deepdistill.kline007.top/docs → host.docker.internal:8006 (API 文档)
+       └── deepdistill.kline007.top/health → host.docker.internal:8006 (健康检查)
+```
+
+- Nginx 配置文件：`~/Documents/soft/AITRADER/nginx/nginx.conf`
+- DeepDistill 独立 docker-compose，不加入 aitrader 网络
+- Nginx 通过 `host.docker.internal` 访问宿主机端口
 
 ---
 
-## 三、Docker 部署（可选）
+## 三、Docker 部署
 
 ### 构建与运行
 
 ```bash
 cd ~/Documents/soft/DeepDistill
 
-# 构建镜像
-docker build -t deepdistill .
+# 一键构建并启动
+docker compose up -d --build
 
-# 运行（挂载数据目录）
-docker run -v $(pwd)/output:/app/output \
-           -v $(pwd)/config:/app/config \
-           --env-file .env \
-           deepdistill process /app/input/video.mp4
+# 查看状态
+docker compose ps
+
+# 查看日志
+docker compose logs -f
+
+# 仅查看后端日志
+docker compose logs -f backend
+
+# 停止
+docker compose down
+
+# 重启
+docker compose restart
 ```
 
-### Docker Compose（含 GPU 支持）
-
-```yaml
-# docker-compose.yml
-services:
-  deepdistill:
-    build: .
-    volumes:
-      - ./input:/app/input
-      - ./output:/app/output
-      - ./config:/app/config
-    env_file: .env
-    # GPU 支持（NVIDIA）
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - capabilities: [gpu]
-```
+### Docker Compose 配置
+- 后端：`Dockerfile`（Python 3.11 + ffmpeg）
+- 前端：`frontend/Dockerfile`（Node 20 + Next.js standalone）
+- 数据卷：`./data` 和 `./config` 挂载到容器
+- 前端依赖后端健康检查通过后才启动
+- `NEXT_PUBLIC_API_URL` 构建时烧入为 `https://deepdistill.kline007.top`
 
 ---
 
-## 四、部署脚本
-
-统一使用 `scripts/deploy.sh`（后续开发）：
+## 四、部署操作速查
 
 ```bash
 cd ~/Documents/soft/DeepDistill
 
-# 本地
-./scripts/deploy.sh start    # 启动
-./scripts/deploy.sh stop     # 停止
-./scripts/deploy.sh status   # 查看状态
-./scripts/deploy.sh logs     # 查看日志
+# 重建并启动（代码变更后）
+docker compose up -d --build
 
-# 远程（需配置服务器信息）
-./scripts/deploy.sh remote   # 同步代码 + 重建容器
+# 仅重建后端
+docker compose up -d --build backend
+
+# 仅重建前端
+docker compose up -d --build frontend
+
+# 重载 Nginx（修改反代配置后）
+docker exec aitrader-nginx nginx -s reload
+
+# 查看 SSL 证书到期时间
+openssl s_client -connect deepdistill.kline007.top:443 -servername deepdistill.kline007.top 2>/dev/null | openssl x509 -noout -dates
+
+# 手动续期 SSL 证书
+docker exec aitrader-certbot certbot renew
 ```
 
 ---
@@ -172,4 +198,14 @@ sudo apt install ffmpeg
 
 ## 经验沉淀
 
-<!-- 部署/环境/Docker 相关经验追加到此处 -->
+### 经验：本机多项目 Docker 部署 + 统一 Nginx 反代
+- 现象: 本机（125.69.16.136）已运行多个项目（AITrader/AICoin/TradeDesk/KKline/FlowEdge），需要新增 DeepDistill
+- 根因: 所有项目共用 `aitrader-nginx` 容器做统一入口（80/443），各项目独立 docker-compose
+- 解决:
+  1. DeepDistill 独立 docker-compose，端口 8006(后端)/3006(前端)
+  2. 在 AITRADER nginx.conf 添加 upstream + server blocks
+  3. Nginx 通过 `host.docker.internal` 访问宿主机端口
+  4. 先生成自签名证书占位 → 重载 Nginx → certbot 申请正式证书 → 替换 → 再重载
+- 验证: `curl https://deepdistill.kline007.top/health` 返回 `{"status":"ok"}`
+- 关联: R6(部署规范), AITRADER/nginx/nginx.conf, docker-compose.yml
+- 日期: 2026-02-12

@@ -11,6 +11,7 @@ interface Task {
   filename: string
   status: 'queued' | 'processing' | 'completed' | 'failed'
   progress: number
+  step_label?: string
   created_at: string
   result: any
   error: string | null
@@ -50,7 +51,7 @@ export default function TaskList() {
 
   if (loading) {
     return (
-      <div className="text-text-tertiary text-sm">加载中...</div>
+      <div className="text-text-tertiary text-base">加载中...</div>
     )
   }
 
@@ -58,16 +59,16 @@ export default function TaskList() {
     return (
       <div className="text-center py-16 text-text-tertiary">
         <div className="text-4xl mb-3">📭</div>
-        <p>暂无处理任务</p>
-        <p className="text-xs mt-1">上传文件开始第一次蒸馏</p>
+        <p className="text-base">暂无处理任务</p>
+        <p className="text-sm mt-1">上传文件开始第一次蒸馏</p>
       </div>
     )
   }
 
   return (
     <div>
-      <h2 className="text-lg font-semibold mb-4 text-text-primary">
-        处理任务 <span className="text-text-tertiary text-sm font-normal">({tasks.length})</span>
+      <h2 className="text-lg sm:text-xl font-semibold mb-4 text-text-primary">
+        处理任务 <span className="text-text-tertiary text-base font-normal">({tasks.length})</span>
       </h2>
 
       <div className="space-y-3">
@@ -83,41 +84,53 @@ function TaskCard({ task }: { task: Task }) {
   const config = STATUS_CONFIG[task.status] || STATUS_CONFIG.queued
 
   return (
-    <div className="bg-surface-2 border border-white/[0.06] rounded-xl p-5 hover:border-white/10 transition-colors animate-fade-in">
-      <div className="flex items-center justify-between mb-3">
+    <div className="bg-surface-2 border border-white/[0.06] rounded-xl p-3 sm:p-5 hover:border-white/10 transition-colors animate-fade-in">
+      <div className="flex items-center justify-between mb-3 gap-2">
         {/* 文件名 + 状态 */}
-        <div className="flex items-center gap-3">
-          <span className="text-lg">{getFileIcon(task.filename)}</span>
-          <span className="font-medium text-text-primary">{task.filename}</span>
-          <span className={`text-xs font-bold px-2 py-0.5 rounded ${config.bg} ${config.color} uppercase tracking-wider`}>
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <span className="text-lg sm:text-xl shrink-0">{getFileIcon(task.filename)}</span>
+          <span className="font-medium text-text-primary text-sm sm:text-base truncate">{task.filename}</span>
+          <span className={`text-xs sm:text-sm font-bold px-2 sm:px-2.5 py-0.5 sm:py-1 rounded ${config.bg} ${config.color} uppercase tracking-wider shrink-0`}>
             {config.label}
           </span>
         </div>
 
         {/* 任务 ID */}
-        <span className="text-xs text-text-tertiary font-mono">#{task.id}</span>
+        <span className="text-xs sm:text-sm text-text-tertiary font-mono shrink-0 hidden sm:inline">#{task.id}</span>
       </div>
 
-      {/* 进度条 */}
-      {task.status === 'processing' && (
-        <div className="h-1 bg-surface-3 rounded-full overflow-hidden mb-3">
-          <div
-            className="h-full bg-gradient-to-r from-info to-ai rounded-full transition-all duration-500"
-            style={{ width: `${task.progress}%` }}
-          />
+      {/* 进度条 + 步骤文字 */}
+      {(task.status === 'processing' || task.status === 'queued') && (
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-sm text-text-tertiary">
+              {task.step_label || (task.status === 'queued' ? '排队等待' : '处理中')}
+            </span>
+            <span className="text-sm font-mono text-text-tertiary">{task.progress}%</span>
+          </div>
+          <div className="h-2 bg-surface-3 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-700 ease-out ${
+                task.status === 'queued'
+                  ? 'bg-warn/60'
+                  : 'bg-gradient-to-r from-info to-ai'
+              }`}
+              style={{ width: `${Math.max(task.progress, 2)}%` }}
+            />
+          </div>
         </div>
       )}
 
       {/* AI 提炼结果预览 */}
       {task.status === 'completed' && task.result?.ai_result?.summary && (
-        <div className="mt-3 p-3 bg-surface-1 rounded-lg border-l-2 border-ai">
-          <p className="text-sm text-text-secondary leading-relaxed">
+        <div className="mt-3 p-4 bg-surface-1 rounded-lg border-l-2 border-ai">
+          <p className="text-base text-text-secondary leading-relaxed">
             {task.result.ai_result.summary}
           </p>
           {task.result.ai_result.keywords && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
+            <div className="mt-3 flex flex-wrap gap-2">
               {task.result.ai_result.keywords.slice(0, 6).map((kw: string, i: number) => (
-                <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-info/10 text-info">
+                <span key={i} className="text-sm px-2.5 py-1 rounded-full bg-info/10 text-info">
                   {kw}
                 </span>
               ))}
@@ -128,7 +141,7 @@ function TaskCard({ task }: { task: Task }) {
 
       {/* 错误信息 */}
       {task.error && (
-        <p className="mt-2 text-xs text-error">{task.error}</p>
+        <p className="mt-2 text-sm text-error">{task.error}</p>
       )}
     </div>
   )

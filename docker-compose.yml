@@ -1,5 +1,6 @@
 # DeepDistill Docker Compose 配置
 # 后端（API + 管线处理）+ 前端（Web UI）
+# 资源限制：防止单个服务耗尽宿主机资源
 
 services:
   backend:
@@ -11,10 +12,25 @@ services:
       - .env
     environment:
       - PORT=8000
+      # 并发与资源保护参数
+      - DEEPDISTILL_MAX_CONCURRENT=${DEEPDISTILL_MAX_CONCURRENT:-3}
+      - DEEPDISTILL_MAX_FILE_SIZE=${DEEPDISTILL_MAX_FILE_SIZE:-2147483648}
+      - DEEPDISTILL_MAX_TASKS=${DEEPDISTILL_MAX_TASKS:-1000}
+      - DEEPDISTILL_PIPELINE_TIMEOUT=${DEEPDISTILL_PIPELINE_TIMEOUT:-3600}
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -35,3 +51,11 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M

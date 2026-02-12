@@ -33,3 +33,21 @@ tiktoken>=0.5
 
 # 快速 JSON
 orjson>=3.9.0
+
+# 视频分析（OpenCV 核心 + 可选 GPU 模型）
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+# 可选：pip install scenedetect ultralytics mediapipe
+# scenedetect[opencv]>=0.6  # 镜头切割（PySceneDetect）
+# ultralytics>=8.0          # 物体检测（YOLOv8）
+# mediapipe>=0.10           # 人体姿态（MediaPipe）
+
+# HTTP 客户端（视觉素材生成 API 调用）
+httpx>=0.25.0
+
+# Google Docs 导出（Markdown -> HTML -> Google Doc）
+google-api-python-client>=2.100.0
+google-auth>=2.20.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+markdown>=3.5

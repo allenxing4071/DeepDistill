@@ -63,8 +63,9 @@ class Config:
     OCR_LANGUAGES: list[str] = _yaml.get("ocr", {}).get("languages", ["ch_sim", "en"])
 
     # AI 分析配置
-    AI_PROVIDER: str = _yaml.get("ai", {}).get("provider", "deepseek")
-    AI_MODEL: str = _yaml.get("ai", {}).get("model", "deepseek-chat")
+    AI_PROVIDER: str = _yaml.get("ai", {}).get("provider", "ollama")
+    AI_MODEL: str = _yaml.get("ai", {}).get("model", "qwen3:8b")
+    AI_FALLBACK_PROVIDERS: list[str] = _yaml.get("ai", {}).get("fallback_providers", ["deepseek", "qwen"])
     AI_LOCAL_THRESHOLD: int = _yaml.get("ai", {}).get("local_threshold", 2000)
 
     # 视频分析配置
@@ -72,6 +73,13 @@ class Config:
 
     # 输出配置
     OUTPUT_FORMAT: str = _yaml.get("output", {}).get("format", "markdown")
+
+    # ── Google Docs 导出配置 ──
+    _export_cfg: dict = _yaml.get("export", {}).get("google_docs", {})
+    GOOGLE_DOCS_ENABLED: bool = _export_cfg.get("enabled", True)
+    GOOGLE_DOCS_FOLDER_NAME: str = _export_cfg.get("folder_name", "DeepDistill")
+    GOOGLE_DOCS_CREDENTIALS_PATH: Path = PROJECT_ROOT / _export_cfg.get("credentials_path", "config/google_credentials.json")
+    GOOGLE_DOCS_TOKEN_PATH: Path = PROJECT_ROOT / _export_cfg.get("token_path", "data/.google_token.json")
 
     # ── 服务端口 ──
     API_PORT: int = int(os.getenv("PORT", "8006"))
@@ -116,10 +124,24 @@ class Config:
             "ai": {
                 "provider": cls.AI_PROVIDER,
                 "model": cls.AI_MODEL,
+                "fallback_providers": cls.AI_FALLBACK_PROVIDERS,
                 "has_api_key": bool(cls.DEEPSEEK_API_KEY or cls.QWEN_API_KEY),
             },
             "video_analysis": {"level": cls.VIDEO_ANALYSIS_LEVEL},
             "output": {"format": cls.OUTPUT_FORMAT},
+            "export": {
+                "google_docs": {
+                    "enabled": cls.GOOGLE_DOCS_ENABLED,
+                    "folder_name": cls.GOOGLE_DOCS_FOLDER_NAME,
+                    "has_credentials": cls.GOOGLE_DOCS_CREDENTIALS_PATH.exists(),
+                    "has_token": cls.GOOGLE_DOCS_TOKEN_PATH.exists(),
+                },
+            },
+            "timeouts": {
+                "pipeline": int(os.getenv("DEEPDISTILL_PIPELINE_TIMEOUT", "3600")),
+                "ffmpeg": int(os.getenv("DEEPDISTILL_FFMPEG_TIMEOUT", "600")),
+                "transcribe": int(os.getenv("DEEPDISTILL_TRANSCRIBE_TIMEOUT", "1800")),
+            },
             "paths": {
                 "data": str(cls.DATA_DIR),
                 "output": str(cls.OUTPUT_DIR),

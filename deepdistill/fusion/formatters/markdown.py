@@ -67,6 +67,56 @@ def format_markdown(result, output_dir: Path) -> str:
                 lines.append(section.get("content", ""))
                 lines.append("")
 
+    # 视频分析结果
+    if result.video_analysis and result.source_type == "video":
+        va = result.video_analysis
+        lines.append("## 视频分析")
+        lines.append("")
+
+        scenes = va.get("scenes", [])
+        if scenes:
+            lines.append(f"**场景数**: {len(scenes)}")
+            lines.append("")
+
+        style = va.get("style", {})
+        if style and style.get("summary"):
+            lines.append(f"**视觉风格**: {style['summary']}")
+            lines.append("")
+
+        cinema = va.get("cinematography", {})
+        if cinema and cinema.get("summary"):
+            lines.append(f"**拍摄手法**: {cinema['summary']}")
+            lines.append("")
+
+        transitions = va.get("transitions", [])
+        if transitions:
+            trans_types = {}
+            for t in transitions:
+                tt = t.get("transition_type", "未知")
+                trans_types[tt] = trans_types.get(tt, 0) + 1
+            trans_desc = "、".join(f"{t}({c}次)" for t, c in trans_types.items())
+            lines.append(f"**转场**: {trans_desc}")
+            lines.append("")
+
+    # 视觉素材 prompt
+    if hasattr(result, 'visual_assets') and result.visual_assets:
+        prompts = result.visual_assets.get("prompts", [])
+        images = result.visual_assets.get("generated_images", [])
+        if prompts:
+            lines.append("## 视觉素材")
+            lines.append("")
+            if images:
+                for img in images:
+                    lines.append(f"![visual]({img})")
+                    lines.append("")
+            else:
+                lines.append("*以下为 AI 生成的图片描述 prompt，可用于 Stable Diffusion / DALL-E 等工具生成配图：*")
+                lines.append("")
+                for p in prompts:
+                    lines.append(f"**{p['title']}**")
+                    lines.append(f"> {p['prompt']}")
+                    lines.append("")
+
     # 原始文本（折叠）
     if result.extracted_text:
         lines.append("---")
