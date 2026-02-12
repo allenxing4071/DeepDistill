@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* DeepDistill 全局样式 — 暗色终端风格 */
+:root {
+  --bg-0: #06070a;
+  --bg-1: #0b0d12;
+  --bg-2: #10131a;
+  --bg-3: #161a24;
+  --border: rgba(255,255,255,0.06);
+  --border-h: rgba(255,255,255,0.10);
+}
+
+body {
+  background: var(--bg-0);
+  color: #eaecf0;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'Segoe UI', sans-serif;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }

@@ -1,0 +1,35 @@
+# DeepDistill — 多源内容深度蒸馏引擎
+# 核心依赖（Docker 镜像使用此文件）
+
+# API 服务
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# 配置管理
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# CLI
+click>=8.0
+rich>=13.0
+
+# ASR 语音转文字
+faster-whisper>=1.0.0
+
+# OCR 图片文字提取
+easyocr>=1.7
+
+# 文档提取
+PyPDF2>=3.0
+python-docx>=1.0
+python-pptx>=0.6
+openpyxl>=3.1
+beautifulsoup4>=4.12
+
+# AI 分析（兼容 OpenAI 接口）
+openai>=1.0
+tiktoken>=0.5
+
+# 快速 JSON
+orjson>=3.9.0

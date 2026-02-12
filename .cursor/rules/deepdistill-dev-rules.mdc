@@ -21,6 +21,7 @@ alwaysApply: true
 | "AI分析/提炼/LLM/prompt/结构化" | `.skills/AI分析/SKILL.md` | R0(变更控制) R5(安全) |
 | "视频分析/镜头/场景/风格/动作" | `.skills/视频分析/SKILL.md` | R0(变更控制) |
 | "部署/上线/重启/Docker" | `.skills/部署运维/SKILL.md` | R6(部署) R0(变更控制) |
+| "UI规范/设计系统/样式/页面视觉/前端" | `.skills/UI/SKILL.md` | R0(变更控制) |
 | 修改代码/修 Bug/加功能 | 无专属 Skill，按 Rules 执行 | R0(变更控制) R1(验证) R7(注释) |
 | 新经验/踩坑 | 写入对应 Skill 的"经验沉淀"区 | R8(经验沉淀) |
 

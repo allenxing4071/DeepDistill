@@ -1,0 +1,37 @@
+# DeepDistill Docker Compose 配置
+# 后端（API + 管线处理）+ 前端（Web UI）
+
+services:
+  backend:
+    build: .
+    container_name: deepdistill-backend
+    ports:
+      - "8006:8000"
+    env_file:
+      - .env
+    environment:
+      - PORT=8000
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://deepdistill.kline007.top}
+    container_name: deepdistill-ui
+    ports:
+      - "3006:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-https://deepdistill.kline007.top}
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

@@ -1,0 +1,39 @@
+# DeepDistill 默认配置
+# 可通过修改此文件调整处理行为，无需改代码
+
+# ── ASR 语音转文字 ──
+asr:
+  # 模型选择：tiny / base / small / medium / large-v3
+  model: base
+  # 语言：null=自动检测，zh=中文，en=英文
+  language: null
+  # 设备：auto / cpu / cuda / mps
+  device: auto
+
+# ── OCR 图片文字提取 ──
+ocr:
+  # 引擎：easyocr / paddleocr
+  engine: easyocr
+  # 识别语言
+  languages:
+    - ch_sim
+    - en
+
+# ── AI 分析 ──
+ai:
+  # 提供商：deepseek / qwen
+  provider: deepseek
+  # 模型名称
+  model: deepseek-chat
+  # 短内容阈值（字符数），低于此值尝试用本地模型
+  local_threshold: 2000
+
+# ── 视频分析 ──
+video_analysis:
+  # 级别：off / basic / standard / full
+  level: off
+
+# ── 输出 ──
+output:
+  # 格式：markdown / json
+  format: markdown
