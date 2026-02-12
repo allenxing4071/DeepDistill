@@ -45,6 +45,9 @@ numpy>=1.24.0
 # HTTP 客户端（视觉素材生成 API 调用）
 httpx>=0.25.0
 
+# 视频平台下载（抖音/TikTok/B站/YouTube 等）
+yt-dlp>=2024.1.0
+
 # Google Docs 导出（Markdown -> HTML -> Google Doc）
 google-api-python-client>=2.100.0
 google-auth>=2.20.0

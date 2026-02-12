@@ -57,35 +57,47 @@ def transcribe(file_path: Path) -> str:
 
         # 转录（带超时保护）
         logger.info(f"开始转录: {file_path.name}（超时 {TRANSCRIBE_TIMEOUT}s）")
-        segments, info = model.transcribe(
-            str(wav_path),
-            language=cfg.ASR_LANGUAGE,
-            beam_size=5,
-            vad_filter=True,
-        )
 
-        logger.info(f"检测语言: {info.language} (概率: {info.language_probability:.2f})")
+        full_text = _transcribe_with_model(model, wav_path, cfg, use_vad=True)
 
-        # 合并片段（带超时检查）
-        texts = []
-        start_time = time.monotonic()
-        for segment in segments:
-            texts.append(segment.text.strip())
-            # 每处理一批片段检查超时
-            elapsed = time.monotonic() - start_time
-            if elapsed > TRANSCRIBE_TIMEOUT:
-                logger.warning(f"转录超时（{elapsed:.0f}s > {TRANSCRIBE_TIMEOUT}s），返回已转录部分")
-                break
+        # VAD 过滤后文本为空时，关闭 VAD 重试（音乐/歌唱类视频可能被 VAD 全部过滤）
+        if not full_text.strip():
+            logger.info("VAD 过滤后无文本，关闭 VAD 重试转录")
+            full_text = _transcribe_with_model(model, wav_path, cfg, use_vad=False)
 
-        full_text = "\n".join(texts)
-        elapsed = time.monotonic() - start_time
-        logger.info(f"转录完成: {len(full_text)} 字符，耗时 {elapsed:.1f}s")
         return full_text
 
     finally:
         # 清理临时文件
         if wav_path.exists() and wav_path != file_path:
             wav_path.unlink()
+
+
+def _transcribe_with_model(model, wav_path: Path, cfg, use_vad: bool = True) -> str:
+    """使用 Whisper 模型转录音频，带超时保护"""
+    segments, info = model.transcribe(
+        str(wav_path),
+        language=cfg.ASR_LANGUAGE,
+        beam_size=5,
+        vad_filter=use_vad,
+    )
+
+    logger.info(f"检测语言: {info.language} (概率: {info.language_probability:.2f}, VAD={use_vad})")
+
+    # 合并片段（带超时检查）
+    texts = []
+    start_time = time.monotonic()
+    for segment in segments:
+        texts.append(segment.text.strip())
+        elapsed = time.monotonic() - start_time
+        if elapsed > TRANSCRIBE_TIMEOUT:
+            logger.warning(f"转录超时（{elapsed:.0f}s > {TRANSCRIBE_TIMEOUT}s），返回已转录部分")
+            break
+
+    full_text = "\n".join(texts)
+    elapsed = time.monotonic() - start_time
+    logger.info(f"转录完成: {len(full_text)} 字符，耗时 {elapsed:.1f}s (VAD={use_vad})")
+    return full_text
 
 
 def _extract_audio(file_path: Path) -> Path:

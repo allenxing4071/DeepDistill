@@ -123,8 +123,16 @@ function StatCard({ label, value, color }: { label: string; value: number; color
   )
 }
 
-// 预定义分类
-const CATEGORIES = ['投诉维权', '学习笔记', '技术文档', '市场分析', '会议纪要', '创意素材', '法律法规', '其他']
+// 分类项（从后端 API 动态加载）
+interface CategoryItem {
+  name: string
+  doc_count: number
+  folder_url: string | null
+  is_custom: boolean
+}
+
+// 预定义分类（仅作为 API 不可用时的 fallback）
+const FALLBACK_CATEGORIES = ['投诉维权', '学习笔记', '技术文档', '市场分析', '会议纪要', '创意素材', '法律法规', '其他']
 
 // 导出格式选项
 const FORMATS = [
@@ -162,6 +170,21 @@ function ResultCard({ task }: { task: Task }) {
   const [showExportMenu, setShowExportMenu] = useState(false)
   const [selectedFormat, setSelectedFormat] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  // 动态分类列表
+  const [categories, setCategories] = useState<CategoryItem[]>([])
+  useEffect(() => {
+    fetch(`${API_URL}/api/export/categories`)
+      .then(res => res.json())
+      .then((data: CategoryItem[]) => {
+        if (Array.isArray(data) && data.length > 0) setCategories(data)
+      })
+      .catch(() => {
+        setCategories(FALLBACK_CATEGORIES.map(name => ({
+          name, doc_count: 0, folder_url: null, is_custom: false,
+        })))
+      })
+  }, [])
 
   // 点击外部关闭菜单
   useEffect(() => {
@@ -299,16 +322,33 @@ function ResultCard({ task }: { task: Task }) {
                       <div className="px-4 py-2 text-xs text-text-tertiary uppercase tracking-wider">
                         {FORMATS.find(f => f.key === selectedFormat)?.label} — 选择分类
                       </div>
-                      {CATEGORIES.map(cat => (
+                      {categories.filter(c => !c.is_custom).map(cat => (
                         <button
-                          key={cat}
-                          onClick={() => handleExportGoogleDocs(selectedFormat, cat)}
+                          key={cat.name}
+                          onClick={() => handleExportGoogleDocs(selectedFormat, cat.name)}
                           className="w-full text-left px-4 py-2 text-sm text-text-secondary
                             hover:bg-white/5 hover:text-text-primary transition-colors"
                         >
-                          {cat}
+                          {cat.name}{cat.doc_count > 0 ? ` (${cat.doc_count})` : ''}
                         </button>
                       ))}
+                      {categories.some(c => c.is_custom) && (
+                        <>
+                          <div className="px-4 py-1 text-xs text-text-tertiary border-t border-white/5 mt-1 pt-1">
+                            自定义目录
+                          </div>
+                          {categories.filter(c => c.is_custom).map(cat => (
+                            <button
+                              key={cat.name}
+                              onClick={() => handleExportGoogleDocs(selectedFormat, cat.name)}
+                              className="w-full text-left px-4 py-2 text-sm text-text-secondary
+                                hover:bg-white/5 hover:text-text-primary transition-colors"
+                            >
+                              📂 {cat.name}{cat.doc_count > 0 ? ` (${cat.doc_count})` : ''}
+                            </button>
+                          ))}
+                        </>
+                      )}
                       <div className="border-t border-white/5 mt-1 pt-1">
                         <button
                           onClick={() => handleExportGoogleDocs(selectedFormat)}

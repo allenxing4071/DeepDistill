@@ -42,6 +42,9 @@ config/token.json
 config/client_secret_*.json
 config/google_credentials.json
 
+# Cookie 文件（含登录态，敏感信息）
+config/cookies/*.txt
+
 # 运行时数据（Docker 卷挂载，不入库）
 data/
 

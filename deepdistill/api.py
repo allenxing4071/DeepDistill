@@ -290,9 +290,9 @@ async def get_status():
     else:
         results["google_drive"] = {"status": "disabled", "detail": "未启用"}
 
-    # 7. Stable Diffusion（可选）
+    # 7. Stable Diffusion（图片生成 — 设计文档中的融合输出层组件）
+    sd_url = os.getenv("SD_WEBUI_URL", "http://host.docker.internal:7860")
     try:
-        sd_url = os.getenv("SD_WEBUI_URL", "http://host.docker.internal:7860")
         async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(f"{sd_url}/sdapi/v1/sd-models")
             if r.status_code == 200:
@@ -312,6 +312,59 @@ async def get_status():
     }
 
     return results
+
+
+# ── 服务启停控制（通过信号文件与宿主机 watcher 交互） ──
+
+# 可控服务清单：服务名 → 信号文件前缀
+_CONTROLLABLE_SERVICES = {
+    "ollama": "ollama",
+    "stable_diffusion": "sd",
+}
+
+# 信号文件目录（挂载到宿主机的 data/.service-ctl/）
+_SERVICE_CTL_DIR = Path(os.getenv("SERVICE_CTL_DIR", "/app/data/.service-ctl"))
+
+
+@app.post("/api/services/{service_name}/{action}")
+async def control_service(service_name: str, action: str):
+    """
+    启停宿主机上的本地服务。
+    通过写入信号文件，由宿主机上的 service-watcher.sh 执行实际操作。
+
+    - service_name: ollama | stable_diffusion
+    - action: start | stop
+    """
+    if service_name not in _CONTROLLABLE_SERVICES:
+        raise HTTPException(400, f"不支持的服务: {service_name}，可选: {list(_CONTROLLABLE_SERVICES.keys())}")
+    if action not in ("start", "stop"):
+        raise HTTPException(400, f"不支持的操作: {action}，可选: start, stop")
+
+    prefix = _CONTROLLABLE_SERVICES[service_name]
+    _SERVICE_CTL_DIR.mkdir(parents=True, exist_ok=True)
+
+    prefix = _CONTROLLABLE_SERVICES[service_name]
+    _SERVICE_CTL_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 清除旧的结果文件
+    result_file = _SERVICE_CTL_DIR / f"{prefix}.result"
+    try:
+        result_file.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    # 写入信号文件（宿主机 watcher 检测到后执行操作）
+    signal_file = _SERVICE_CTL_DIR / f"{prefix}.{action}"
+    signal_file.write_text(f"{action} at {datetime.now(timezone.utc).isoformat()}")
+    logger.info(f"服务控制: {service_name} → {action}（信号文件: {signal_file}）")
+
+    # 立即返回，前端通过轮询 /api/status 来获取最新状态
+    return JSONResponse({
+        "service": service_name,
+        "action": action,
+        "ok": True,
+        "msg": f"{'启动' if action == 'start' else '停止'}指令已发送",
+    })
 
 
 # ── 文件上传处理（支持处理选项） ──
@@ -400,7 +453,7 @@ class UrlRequest(BaseModel):
 
 @app.post("/api/process/url")
 async def process_url(body: UrlRequest):
-    """抓取网页 URL 并启动处理管线"""
+    """智能处理 URL：自动检测视频（1800+ 平台）或网页内容"""
     url = body.url.strip()
     if not url:
         raise HTTPException(status_code=400, detail="URL 不能为空")
@@ -422,7 +475,7 @@ async def process_url(body: UrlRequest):
         "status": "queued",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "progress": 0,
-        "step_label": "排队等待",
+        "step_label": "排队等待（智能识别中）",
         "result": None,
         "error": None,
         "options": opts,
@@ -435,7 +488,12 @@ async def process_url(body: UrlRequest):
 
 
 async def _run_url_pipeline(task_id: str, url: str):
-    """抓取网页并执行处理管线，受并发限制，实时更新进度"""
+    """
+    智能 URL 处理管线：
+    1. 先用 yt-dlp 探测 URL 是否包含视频（支持 1800+ 平台）
+    2. 有视频 → 下载视频 → ASR 语音转文字 → AI 提炼
+    3. 无视频 → httpx 抓取网页 → 文本提取 → AI 提炼
+    """
     task = _tasks[task_id]
     opts = task.get("options", {})
 
@@ -445,24 +503,57 @@ async def _run_url_pipeline(task_id: str, url: str):
         task["step_label"] = f"排队中（前方 {active} 个任务）"
 
     file_path = None
+    is_video = False
     async with _pipeline_semaphore:
         try:
             task["status"] = "processing"
-            task["progress"] = 3
-            task["step_label"] = "正在抓取网页"
-
-            # Step 1: 抓取网页
-            from .ingestion.web_fetcher import fetch_url
+            task["progress"] = 2
+            task["step_label"] = "正在智能识别内容类型"
             upload_dir = cfg.DATA_DIR / "uploads"
             loop = asyncio.get_event_loop()
-            file_path = await loop.run_in_executor(None, fetch_url, url, upload_dir)
 
-            task["progress"] = 10
-            task["step_label"] = "网页抓取完成，开始分析"
+            # ── Step 1: 智能探测 — yt-dlp 检测是否为视频 ──
+            from .ingestion.video_downloader import (
+                probe_video, download_video, _get_platform_hint, VideoCookieRequired,
+            )
+            try:
+                video_info = await loop.run_in_executor(None, probe_video, url)
+            except VideoCookieRequired as e:
+                # 确认是视频平台但需要 Cookie → 直接报错，不降级为网页
+                task["status"] = "failed"
+                task["error"] = str(e)
+                task["step_label"] = f"{e.platform} 需要 Cookie"
+                logger.warning(f"URL 任务 {task_id}: {e}")
+                return
 
-            # Step 2: 执行管线（传递 intent + 进度回调）
+            if video_info:
+                # ── 视频路径：yt-dlp 下载 → ASR 转文字 ──
+                is_video = True
+                platform = _get_platform_hint(url)
+                title = video_info.get("title", "")
+                duration = video_info.get("duration", 0)
+                task["filename"] = f"[{platform}] {title[:40]}" if title else task["filename"]
+                task["progress"] = 5
+                task["step_label"] = f"检测到{platform}视频（{duration}s），正在下载"
+
+                file_path = await loop.run_in_executor(None, download_video, url, upload_dir)
+
+                task["progress"] = 15
+                task["step_label"] = f"视频下载完成，开始语音转文字"
+            else:
+                # ── 网页路径：httpx 抓取 HTML ──
+                task["progress"] = 5
+                task["step_label"] = "未检测到视频，正在抓取网页"
+                from .ingestion.web_fetcher import fetch_url
+                file_path = await loop.run_in_executor(None, fetch_url, url, upload_dir)
+
+                task["progress"] = 10
+                task["step_label"] = "网页抓取完成，开始分析"
+
+            # ── Step 2: 执行管线 ──
             def _on_progress(pct: int, label: str):
-                mapped = int(10 + (pct - 5) * 85 / 95)
+                base = 15 if is_video else 10
+                mapped = int(base + (pct - 5) * (95 - base) / 95)
                 task["progress"] = min(mapped, 95)
                 task["step_label"] = label
 
@@ -493,7 +584,7 @@ async def _run_url_pipeline(task_id: str, url: str):
                 task["step_label"] = "处理完成"
                 task["result"] = result.to_dict()
 
-                # Step 3: 自动导出
+                # ── Step 3: 自动导出 ──
                 if opts.get("auto_export") and cfg.GOOGLE_DOCS_ENABLED:
                     task["step_label"] = "正在导出到 Google Drive"
                     await _auto_export(task_id)
@@ -507,7 +598,7 @@ async def _run_url_pipeline(task_id: str, url: str):
             task["status"] = "failed"
             task["error"] = str(e)
         finally:
-            # 清理抓取的临时文件
+            # 清理下载的临时文件
             try:
                 if file_path and file_path.exists() and "uploads" in str(file_path):
                     file_path.unlink(missing_ok=True)
@@ -598,12 +689,27 @@ async def list_tasks(limit: int = Query(20, ge=1, le=100)):
     return [_task_to_api_response(t) for t in tasks[:limit]]
 
 
-# ── Google Docs 分类列表 ──
+# ── Google Docs 分类列表（动态读取 Drive 目录 + 预定义合并） ──
 @app.get("/api/export/categories")
 async def list_export_categories():
-    """列出所有可用的导出分类"""
-    from .export.google_docs import GoogleDocsExporter
-    return [{"name": name} for name in GoogleDocsExporter.CATEGORIES]
+    """
+    列出所有可用的导出分类（预定义 + Google Drive 已有的自定义目录）。
+    前端启动时调用此接口，确保分类下拉列表与 Drive 实际目录同步。
+    """
+    try:
+        from .export.google_docs import get_exporter
+        loop = asyncio.get_event_loop()
+        exporter = get_exporter()
+        categories = await loop.run_in_executor(None, exporter.list_categories)
+        return categories
+    except Exception as e:
+        # Drive 不可用时 fallback 到预定义列表
+        logger.warning(f"读取 Drive 分类失败，使用预定义列表: {e}")
+        from .export.google_docs import GoogleDocsExporter
+        return [
+            {"name": name, "doc_count": 0, "folder_url": None, "is_custom": False}
+            for name in GoogleDocsExporter.CATEGORIES
+        ]
 
 
 # ── 手动导出到 Google Docs（支持分类 + 格式选择） ──

@@ -17,9 +17,11 @@ services:
       - DEEPDISTILL_MAX_FILE_SIZE=${DEEPDISTILL_MAX_FILE_SIZE:-2147483648}
       - DEEPDISTILL_MAX_TASKS=${DEEPDISTILL_MAX_TASKS:-1000}
       - DEEPDISTILL_PIPELINE_TIMEOUT=${DEEPDISTILL_PIPELINE_TIMEOUT:-3600}
+      - MODEL_CACHE_DIR=/app/data/models
     volumes:
       - ./data:/app/data
       - ./config:/app/config
+      - ./data/models:/app/data/models
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

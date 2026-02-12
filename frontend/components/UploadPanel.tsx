@@ -17,8 +17,16 @@ interface TrackedTask {
   status: TaskStatus
 }
 
-// 预定义分类
-const CATEGORIES = ['投诉维权', '学习笔记', '技术文档', '市场分析', '会议纪要', '创意素材', '法律法规', '其他']
+// 分类项（从后端 API 动态加载）
+interface CategoryItem {
+  name: string
+  doc_count: number
+  folder_url: string | null
+  is_custom: boolean
+}
+
+// 预定义分类（仅作为 API 不可用时的 fallback）
+const FALLBACK_CATEGORIES = ['投诉维权', '学习笔记', '技术文档', '市场分析', '会议纪要', '创意素材', '法律法规', '其他']
 
 interface UploadPanelProps {
   onUploadComplete?: () => void
@@ -73,6 +81,33 @@ export default function UploadPanel({ onUploadComplete }: UploadPanelProps) {
   const [exportFormat, setExportFormat] = useState<'doc' | 'word' | 'excel'>('doc')
   const [docType, setDocType] = useState<'doc' | 'skill' | 'both'>('doc')
   const [category, setCategory] = useState<string>('')
+  const [customCategory, setCustomCategory] = useState<string>('')
+
+  // 校验分类是否已选择（必须选择一个具体目录才能执行）
+  const isCategoryValid = (): boolean => {
+    if (!category || category === '') return false
+    if (category === 'custom') return customCategory.trim().length > 0
+    return true
+  }
+
+  // ── 动态分类列表（从 Google Drive 同步） ──
+  const [categories, setCategories] = useState<CategoryItem[]>([])
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/export/categories`)
+      .then(res => res.json())
+      .then((data: CategoryItem[]) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setCategories(data)
+        }
+      })
+      .catch(() => {
+        // API 不可用时使用 fallback
+        setCategories(FALLBACK_CATEGORIES.map(name => ({
+          name, doc_count: 0, folder_url: null, is_custom: false,
+        })))
+      })
+  }, [])
 
   const addMessage = (text: string, type: 'success' | 'error' | 'info' = 'info') => {
     setMessages(prev => [{ text, type }, ...prev].slice(0, 10))
@@ -83,7 +118,7 @@ export default function UploadPanel({ onUploadComplete }: UploadPanelProps) {
     intent,
     export_format: exportFormat,
     doc_type: docType,
-    category: category || null,
+    category: category === 'custom' ? customCategory.trim() : category,
     auto_export: true,
   })
 
@@ -100,6 +135,12 @@ export default function UploadPanel({ onUploadComplete }: UploadPanelProps) {
   // ── URL 提交（支持多个） ──
   const handleUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (!isCategoryValid()) {
+      addMessage('请先选择一个分类目录（或新建目录）', 'error')
+      return
+    }
+
     const urls = parseUrls(urlInput)
     if (urls.length === 0) {
       addMessage('请输入至少一个有效的 URL（以 http:// 或 https:// 开头）', 'error')
@@ -164,7 +205,7 @@ export default function UploadPanel({ onUploadComplete }: UploadPanelProps) {
     setIsDragging(false)
     const files = Array.from(e.dataTransfer.files)
     if (files.length > 0) uploadFiles(files)
-  }, [intent, exportFormat, docType, category])
+  }, [intent, exportFormat, docType, category, customCategory])
 
   // ── 文件选择 ──
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -179,6 +220,11 @@ export default function UploadPanel({ onUploadComplete }: UploadPanelProps) {
   // ── 批量上传 ──
   const uploadFiles = async (files: File[]) => {
     if (files.length === 0) return
+
+    if (!isCategoryValid()) {
+      addMessage('请先选择一个分类目录（或新建目录）', 'error')
+      return
+    }
 
     setUploading(true)
     addMessage(`⏳ 正在上传 ${files.length} 个文件...`, 'info')
@@ -344,15 +390,38 @@ export default function UploadPanel({ onUploadComplete }: UploadPanelProps) {
             <select
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="w-full px-3 py-2.5 rounded-lg bg-surface-1 border border-white/5
-                text-text-secondary text-sm focus:outline-none focus:border-info/50
-                focus:ring-1 focus:ring-info/20 transition-colors"
+              className={`w-full px-3 py-2.5 rounded-lg bg-surface-1 border text-sm
+                focus:outline-none focus:border-info/50 focus:ring-1 focus:ring-info/20 transition-colors
+                ${!category || category === '' ? 'border-error/50 text-text-tertiary' : 'border-white/5 text-text-secondary'}`}
             >
-              <option value="">不分类（根目录）</option>
-              {CATEGORIES.map(cat => (
-                <option key={cat} value={cat}>{cat}</option>
+              <option value="" disabled>── 请选择分类目录 ──</option>
+              {categories.filter(c => !c.is_custom).map(cat => (
+                <option key={cat.name} value={cat.name}>
+                  {cat.name}{cat.doc_count > 0 ? ` (${cat.doc_count})` : ''}
+                </option>
               ))}
+              {categories.some(c => c.is_custom) && (
+                <option disabled>── 自定义目录 ──</option>
+              )}
+              {categories.filter(c => c.is_custom).map(cat => (
+                <option key={cat.name} value={cat.name}>
+                  📂 {cat.name}{cat.doc_count > 0 ? ` (${cat.doc_count})` : ''}
+                </option>
+              ))}
+              <option value="custom">📁 新建目录...</option>
             </select>
+            {category === 'custom' && (
+              <input
+                type="text"
+                value={customCategory}
+                onChange={(e) => setCustomCategory(e.target.value)}
+                placeholder="输入自定义目录名称"
+                className="w-full mt-2 px-3 py-2 rounded-lg bg-surface-1 border border-white/5
+                  text-text-secondary text-sm focus:outline-none focus:border-info/50
+                  focus:ring-1 focus:ring-info/20 transition-colors
+                  placeholder:text-text-tertiary"
+              />
+            )}
           </div>
         </div>
 
@@ -370,24 +439,24 @@ export default function UploadPanel({ onUploadComplete }: UploadPanelProps) {
           <span className="text-warn">
             {docType === 'doc' ? '普通文档' : docType === 'skill' ? 'Skill' : '两者'}
           </span>
-          {category && (
-            <>
-              <span>→</span>
-              <span className="text-text-secondary">{category}</span>
-            </>
-          )}
+          <span>→</span>
+          <span className={!isCategoryValid() ? 'text-error' : 'text-text-secondary'}>
+            {!category || category === '' ? '⚠️ 未选择目录' :
+             category === 'custom' ? (customCategory.trim() ? `📁 ${customCategory}` : '⚠️ 请输入目录名') :
+             `📂 ${category}`}
+          </span>
           <span className="sm:ml-auto text-success/70">自动导出到 Google Drive</span>
         </div>
       </div>
 
       {/* ── URL 输入区域 ── */}
       <div>
-        <h2 className="text-lg sm:text-xl font-semibold mb-3 text-text-primary">网页抓取</h2>
+        <h2 className="text-lg sm:text-xl font-semibold mb-3 text-text-primary">网页 / 视频抓取</h2>
         <form onSubmit={handleUrlSubmit} className="space-y-3">
           <textarea
             value={urlInput}
             onChange={(e) => setUrlInput(e.target.value)}
-            placeholder={"输入网页 URL，每行一个，支持批量\nhttps://example.com/article-1\nhttps://example.com/article-2"}
+            placeholder={"输入 URL，每行一个，支持批量\n自动识别：网页文章 / 视频（1800+ 平台）\n抖音 / B站 / YouTube / TikTok / 小红书 / 快手 / 微博..."}
             disabled={urlLoading}
             rows={3}
             className="w-full px-4 py-3 rounded-xl bg-surface-1 border border-white/10
@@ -397,11 +466,11 @@ export default function UploadPanel({ onUploadComplete }: UploadPanelProps) {
           />
           <div className="flex items-center justify-between">
             <span className="text-sm text-text-tertiary">
-              {urlCount > 0 ? `已识别 ${urlCount} 个 URL` : '每行一个 URL，或用逗号分隔'}
+              {urlCount > 0 ? `已识别 ${urlCount} 个 URL（自动检测视频/网页）` : '每行一个 URL，或用逗号分隔'}
             </span>
             <button
               type="submit"
-              disabled={urlLoading || urlCount === 0}
+              disabled={urlLoading || urlCount === 0 || !isCategoryValid()}
               className="px-6 py-2.5 rounded-xl bg-info/10 text-info text-base font-medium
                 hover:bg-info/20 disabled:opacity-40 disabled:cursor-not-allowed
                 transition-colors whitespace-nowrap"

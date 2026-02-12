@@ -192,43 +192,73 @@ class GoogleDocsExporter:
         return folder_id
 
     def list_categories(self) -> list[dict]:
-        """列出所有预定义分类及其在 Google Drive 中的文档数量"""
+        """
+        列出所有分类目录（预定义 + Google Drive 已有的自定义目录）。
+        从 Google Drive 动态读取 DeepDistill 根目录下的所有子文件夹，
+        与预定义分类合并后返回，确保前后端分类列表始终同步。
+        """
         root_id = self._ensure_folder()
         service = self._get_drive_service()
+
+        # 一次性读取 DeepDistill 根目录下所有子文件夹
+        query = (
+            f"'{root_id}' in parents "
+            "and mimeType = 'application/vnd.google-apps.folder' "
+            "and trashed = false"
+        )
+        all_folders = service.files().list(
+            q=query, spaces="drive",
+            fields="files(id, name)", pageSize=100,
+        ).execute().get("files", [])
+
+        # 构建 name -> folder_id 映射
+        drive_folders: dict[str, str] = {f["name"]: f["id"] for f in all_folders}
+
+        # 合并：预定义分类优先排在前面，然后是 Drive 上的自定义目录
+        seen = set()
         result = []
 
+        # 先加预定义分类（保持固定顺序）
         for cat_name in self.CATEGORIES:
-            # 查找子文件夹
-            query = (
-                f"name = '{cat_name}' "
-                f"and '{root_id}' in parents "
-                "and mimeType = 'application/vnd.google-apps.folder' "
-                "and trashed = false"
-            )
-            folders = service.files().list(
-                q=query, spaces="drive", fields="files(id)", pageSize=1
-            ).execute().get("files", [])
-
+            seen.add(cat_name)
+            fid = drive_folders.get(cat_name)
             doc_count = 0
             folder_url = None
-            if folders:
-                fid = folders[0]["id"]
-                # 统计该文件夹下的文档数
+            if fid:
                 doc_query = (
                     f"'{fid}' in parents "
-                    "and mimeType = 'application/vnd.google-apps.document' "
                     "and trashed = false"
                 )
                 docs = service.files().list(
-                    q=doc_query, spaces="drive", fields="files(id)", pageSize=100
+                    q=doc_query, spaces="drive",
+                    fields="files(id)", pageSize=200,
                 ).execute().get("files", [])
                 doc_count = len(docs)
                 folder_url = f"https://drive.google.com/drive/folders/{fid}"
-
             result.append({
                 "name": cat_name,
                 "doc_count": doc_count,
                 "folder_url": folder_url,
+                "is_custom": False,
+            })
+
+        # 再加 Drive 上已有但不在预定义列表中的自定义目录
+        for folder_name, fid in sorted(drive_folders.items()):
+            if folder_name in seen:
+                continue
+            doc_query = (
+                f"'{fid}' in parents "
+                "and trashed = false"
+            )
+            docs = service.files().list(
+                q=doc_query, spaces="drive",
+                fields="files(id)", pageSize=200,
+            ).execute().get("files", [])
+            result.append({
+                "name": folder_name,
+                "doc_count": len(docs),
+                "folder_url": f"https://drive.google.com/drive/folders/{fid}",
+                "is_custom": True,
             })
 
         return result
@@ -280,9 +310,14 @@ th {{ background: #f5f5f5; font-weight: bold; }}
         service = self._get_drive_service()
 
         # 强制放入子目录，不允许根目录
-        if not category or category not in self.CATEGORIES:
+        # 支持自定义目录名：只要 category 非空就创建对应子文件夹
+        if not category or not category.strip():
             category = "其他"
-            logger.info(f"未指定有效分类，默认放入「其他」目录")
+            logger.info(f"未指定分类，默认放入「其他」目录")
+        else:
+            category = category.strip()
+            if category not in self.CATEGORIES:
+                logger.info(f"使用自定义分类目录「{category}」")
         folder_id = self._ensure_subfolder(category)
 
         # Markdown -> HTML
@@ -442,7 +477,6 @@ th {{ background: #f5f5f5; font-weight: bold; }}
     def _build_doc_markdown(self, task: dict) -> tuple[str, str]:
         """构建普通文档格式的 Markdown，返回 (md_content, title)"""
         result = task.get("result", {})
-        filename = task.get("filename", "未知文件")
         title = self._generate_short_title(task)
 
         # 优先使用已生成的 Markdown 文件
@@ -469,7 +503,7 @@ th {{ background: #f5f5f5; font-weight: bold; }}
             preview = raw_text[:500] + ("..." if len(raw_text) > 500 else "")
             md_lines += ["---", "", "## 原始文本预览", "", f"> 完整原始文本请查看同目录下的 **[源文件]** 文档（共 {len(raw_text)} 字符）", "", preview, ""]
 
-        return "\n".join(md_lines), stem
+        return "\n".join(md_lines), title
 
     def _build_skill_markdown(self, task: dict) -> tuple[str, str]:
         """构建 Skill 文档格式的 Markdown，返回 (md_content, title)"""
@@ -627,10 +661,14 @@ th {{ background: #f5f5f5; font-weight: bold; }}
         if not result:
             raise ValueError("任务尚未完成或无结果")
 
-        # 强制分类：如果未指定或不在预定义列表中，自动推断
-        if not category or category not in self.CATEGORIES:
+        # 分类策略：未指定时自动推断，自定义目录名直接使用
+        if not category or not category.strip():
             category = self._auto_categorize(task)
             logger.info(f"自动分类: {category}")
+        else:
+            category = category.strip()
+            if category not in self.CATEGORIES:
+                logger.info(f"使用自定义分类目录「{category}」")
 
         def _export_one(md_content: str, title: str) -> dict:
             """根据 export_format 选择导出方式"""
@@ -876,10 +914,12 @@ th {{ background: #f5f5f5; font-weight: bold; }}
 
         service = self._get_drive_service()
 
-        # 强制放入子目录，不允许根目录
-        if not category or category not in self.CATEGORIES:
+        # 强制放入子目录，支持自定义目录名
+        if not category or not category.strip():
             category = "其他"
-            logger.info(f"未指定有效分类，默认放入「其他」目录")
+            logger.info(f"未指定分类，默认放入「其他」目录")
+        else:
+            category = category.strip()
         folder_id = self._ensure_subfolder(category)
 
         file_metadata = {

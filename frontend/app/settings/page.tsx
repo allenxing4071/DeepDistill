@@ -126,6 +126,8 @@ export default function SettingsPage() {
                   badge={config?.ai.provider === 'ollama' ? '主引擎' : undefined}
                   extra={status?.ollama?.models ? `已加载 ${status.ollama.models.length} 个模型` : undefined}
                   location="local"
+                  serviceKey="ollama"
+                  onRefresh={fetchAll}
                 />
                 <ModelCard
                   name="DeepSeek"
@@ -193,6 +195,8 @@ export default function SettingsPage() {
                   model="SD WebUI"
                   status={status?.stable_diffusion}
                   location="local"
+                  serviceKey="stable_diffusion"
+                  onRefresh={fetchAll}
                 />
               </div>
             </section>
@@ -311,13 +315,50 @@ function LocationTag({ location }: { location: 'local' | 'cloud' }) {
 }
 
 function ModelCard({
-  name, subtitle, model, status, isPrimary, badge, extra, location,
+  name, subtitle, model, status, isPrimary, badge, extra, location, serviceKey, onRefresh,
 }: {
   name: string; subtitle: string; model: string; status?: ServiceStatus
   isPrimary?: boolean; badge?: string; extra?: string; location?: 'local' | 'cloud'
+  serviceKey?: string; onRefresh?: () => void
 }) {
   const s = status?.status || 'offline'
   const theme = STATUS_THEME[s] || STATUS_THEME.offline
+  const [toggling, setToggling] = useState(false)
+
+  const isRunning = s === 'running' || s === 'ready'
+  const canControl = !!serviceKey
+
+  const handleToggle = async () => {
+    if (!serviceKey || toggling) return
+    const action = isRunning ? 'stop' : 'start'
+    setToggling(true)
+    try {
+      // 发送启停指令（立即返回）
+      await fetch(`${API_URL}/api/services/${serviceKey}/${action}`, { method: 'POST' })
+      // 轮询状态直到变化或超时
+      const maxPolls = serviceKey === 'stable_diffusion' && action === 'start' ? 40 : 15
+      for (let i = 0; i < maxPolls; i++) {
+        await new Promise(r => setTimeout(r, 2000))
+        try {
+          const statusResp = await fetch(`${API_URL}/api/status`)
+          const statusData = await statusResp.json()
+          const svcStatus = statusData[serviceKey]?.status
+          const nowRunning = svcStatus === 'running' || svcStatus === 'ready'
+          // 状态已变化，刷新并退出
+          if ((action === 'stop' && !nowRunning) || (action === 'start' && nowRunning)) {
+            onRefresh?.()
+            return
+          }
+        } catch { /* 继续轮询 */ }
+      }
+      // 超时，也刷新一次
+      onRefresh?.()
+    } catch (e) {
+      console.error('服务控制失败:', e)
+    } finally {
+      setToggling(false)
+    }
+  }
 
   return (
     <div className={`
@@ -349,6 +390,36 @@ function ModelCard({
       <div className={`text-sm font-medium ${theme.text}`}>{theme.label} · {status?.detail || '-'}</div>
 
       {extra && <div className="text-sm text-text-tertiary mt-2">{extra}</div>}
+
+      {/* 启停按钮 */}
+      {canControl && (
+        <div className="mt-4 pt-3 border-t border-white/[0.06]">
+          <button
+            onClick={handleToggle}
+            disabled={toggling}
+            className={`
+              w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+              transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
+              ${isRunning
+                ? 'bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20'
+                : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20'
+              }
+            `}
+          >
+            {toggling ? (
+              <>
+                <span className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin" />
+                {isRunning ? '停止中...' : '启动中...'}
+              </>
+            ) : (
+              <>
+                <span className="text-base">{isRunning ? '⏹' : '▶'}</span>
+                {isRunning ? '停止服务' : '启动服务'}
+              </>
+            )}
+          </button>
+        </div>
+      )}
 
       {s === 'running' && (
         <div className="absolute bottom-0 left-5 right-5 h-[2px] rounded-full overflow-hidden">
