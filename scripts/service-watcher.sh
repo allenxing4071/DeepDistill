@@ -78,79 +78,7 @@ stop_ollama() {
   fi
 }
 
-# ── Stable Diffusion 控制 ──
-start_sd() {
-  if _sd_is_running; then
-    log "SD WebUI 已在运行"
-    echo '{"ok":true,"msg":"already running"}' > "$CTL_DIR/sd.result"
-    return
-  fi
-  if [ ! -d "$SD_DIR" ]; then
-    log "SD WebUI 目录不存在: $SD_DIR（可设置环境变量 SD_WEBUI_DIR 指定路径）"
-    echo "{\"ok\":false,\"msg\":\"SD WebUI 未安装或路径错误，请设置 SD_WEBUI_DIR 或放置于 $SD_DIR\"}" > "$CTL_DIR/sd.result"
-    return
-  fi
-  # 启动脚本：优先 webui.sh（Forge/AUTOMATIC1111），其次 launch.py
-  LAUNCHER=""
-  [ -f "$SD_DIR/webui.sh" ] && LAUNCHER="bash webui.sh"
-  [ -z "$LAUNCHER" ] && [ -f "$SD_DIR/launch.py" ] && LAUNCHER="python launch.py"
-  if [ -z "$LAUNCHER" ]; then
-    log "SD WebUI 目录内未找到 webui.sh 或 launch.py"
-    echo '{"ok":false,"msg":"SD WebUI 目录内无 webui.sh 或 launch.py"}' > "$CTL_DIR/sd.result"
-    return
-  fi
-  log "启动 SD WebUI: $LAUNCHER"
-  cd "$SD_DIR" && nohup $LAUNCHER > "$PROJECT_DIR/data/sd-webui.log" 2>&1 &
-  # 等待启动（最多 120 秒）
-  for i in $(seq 1 40); do
-    sleep 3
-    if curl -s http://localhost:7860/sdapi/v1/sd-models > /dev/null 2>&1; then
-      log "SD WebUI 启动成功（耗时 $((i*3)) 秒）"
-      echo '{"ok":true,"msg":"started"}' > "$CTL_DIR/sd.result"
-      return
-    fi
-  done
-  log "SD WebUI 启动超时"
-  echo '{"ok":false,"msg":"start timeout"}' > "$CTL_DIR/sd.result"
-}
-
-_sd_is_running() {
-  curl -s --max-time 2 http://localhost:7860/sdapi/v1/sd-models > /dev/null 2>&1
-}
-
-stop_sd() {
-  if ! _sd_is_running; then
-    log "SD WebUI 未在运行"
-    echo '{"ok":true,"msg":"already stopped"}' > "$CTL_DIR/sd.result"
-    return
-  fi
-  log "停止 SD WebUI..."
-  # 找到监听 7860 端口的进程并 kill
-  SD_PID=$(lsof -ti :7860 2>/dev/null | head -1)
-  if [ -n "$SD_PID" ]; then
-    kill "$SD_PID" 2>/dev/null || true
-    sleep 3
-    # 如果还在，强制 kill
-    if _sd_is_running; then
-      kill -9 "$SD_PID" 2>/dev/null || true
-      # 也 kill 相关的 python 子进程
-      pkill -9 -P "$SD_PID" 2>/dev/null || true
-      sleep 2
-    fi
-  fi
-  # 兜底：kill 所有 SD 相关进程
-  if _sd_is_running; then
-    lsof -ti :7860 2>/dev/null | xargs kill -9 2>/dev/null || true
-    sleep 2
-  fi
-  if ! _sd_is_running; then
-    log "SD WebUI 已停止"
-    echo '{"ok":true,"msg":"stopped"}' > "$CTL_DIR/sd.result"
-  else
-    log "SD WebUI 停止失败"
-    echo '{"ok":false,"msg":"stop failed"}' > "$CTL_DIR/sd.result"
-  fi
-}
+# （已移除 Stable Diffusion 控制 — 不再集成 SD WebUI）
 
 # ── 主循环：监听信号文件 ──
 log "Service Watcher 启动，监听目录: $CTL_DIR"
@@ -164,16 +92,6 @@ while true; do
   if [ -f "$CTL_DIR/ollama.stop" ]; then
     rm -f "$CTL_DIR/ollama.stop" "$CTL_DIR/ollama.result"
     stop_ollama &
-  fi
-
-  # SD WebUI
-  if [ -f "$CTL_DIR/sd.start" ]; then
-    rm -f "$CTL_DIR/sd.start" "$CTL_DIR/sd.result"
-    start_sd &
-  fi
-  if [ -f "$CTL_DIR/sd.stop" ]; then
-    rm -f "$CTL_DIR/sd.stop" "$CTL_DIR/sd.result"
-    stop_sd &
   fi
 
   sleep 1

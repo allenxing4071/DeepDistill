@@ -205,15 +205,7 @@ class Pipeline:
             result.errors.append(f"输出生成失败: {e}")
         self._report_progress("output", 1.0)
 
-        # Layer 5.5: 视觉素材生成（可选）
-        self._report_progress("visual", 0.0)
-        if result.ai_result:
-            try:
-                result.visual_assets = self._generate_visuals(result)
-                if result.visual_assets.get("prompts"):
-                    logger.info(f"  🎨 视觉素材: {len(result.visual_assets['prompts'])} 个 prompt")
-            except Exception as e:
-                logger.warning(f"  ⚠️ 视觉素材生成跳过: {e}")
+        # Layer 5.5: 视觉素材生成（已移除 — Stable Diffusion 不再集成）
         self._report_progress("visual", 1.0)
 
         result.processing_time_sec = round(time.time() - start, 2)

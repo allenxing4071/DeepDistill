@@ -322,33 +322,7 @@ async def get_status():
     else:
         results["google_drive"] = {"status": "disabled", "detail": "未启用"}
 
-    # 7. Stable Diffusion（图片生成 — 设计文档中的融合输出层组件）
-    sd_url = os.getenv("SD_WEBUI_URL", "http://host.docker.internal:7860")
-    sd_detail = "未启动"
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"{sd_url}/sdapi/v1/sd-models")
-            if r.status_code == 200:
-                results["stable_diffusion"] = {"status": "running", "detail": "WebUI 运行中"}
-            else:
-                results["stable_diffusion"] = {"status": "error", "detail": f"HTTP {r.status_code}"}
-    except Exception:
-        # 若存在 sd.result（宿主机 watcher 写入的失败原因），展示给用户
-        _sd_result_file = _SERVICE_CTL_DIR / "sd.result"
-        if _sd_result_file.exists():
-            try:
-                raw = _sd_result_file.read_text(encoding="utf-8").strip()
-                data = json.loads(raw) if raw else {}
-                if not data.get("ok") and data.get("msg"):
-                    sd_detail = data.get("msg", sd_detail)
-            except Exception:
-                pass
-        else:
-            # 无 result 文件时提示：可能宿主机未运行 service-watcher.sh
-            sd_detail = "未启动（需在宿主机运行 scripts/service-watcher.sh 后点击启动）"
-        results["stable_diffusion"] = {"status": "offline", "detail": sd_detail}
-
-    # 8. 活跃任务数
+    # 7. 活跃任务数
     active = sum(1 for t in _tasks.values() if t["status"] in ("queued", "processing"))
     results["pipeline"] = {
         "status": "running" if active > 0 else "ready",
@@ -365,7 +339,6 @@ async def get_status():
 # 可控服务清单：服务名 → 信号文件前缀
 _CONTROLLABLE_SERVICES = {
     "ollama": "ollama",
-    "stable_diffusion": "sd",
 }
 
 # 信号文件目录（挂载到宿主机的 data/.service-ctl/）

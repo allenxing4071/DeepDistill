@@ -300,8 +300,8 @@ export default function SettingsPage() {
 
             {/* ── 处理引擎 ── */}
             <section>
-              <SectionHeader title="处理引擎" subtitle="语音识别 · 文字识别 · 视频分析 · 图像生成" />
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
+              <SectionHeader title="处理引擎" subtitle="语音识别 · 文字识别 · 视频分析" />
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
                 <ModelCard
                   name="Whisper"
                   subtitle="语音转文字"
@@ -326,15 +326,6 @@ export default function SettingsPage() {
                     detail: config?.video_analysis.level && config.video_analysis.level !== 'off' ? 'PySceneDetect + YOLOv8' : 'MVP 阶段',
                   }}
                   location="local"
-                />
-                <ModelCard
-                  name="Stable Diffusion"
-                  subtitle="图像生成"
-                  model="SD WebUI"
-                  status={status?.stable_diffusion}
-                  location="local"
-                  serviceKey="stable_diffusion"
-                  onRefresh={fetchAll}
                 />
               </div>
             </section>
@@ -489,7 +480,7 @@ function ModelCard({
       // 发送启停指令（立即返回）
       await fetch(`${API_URL}/api/services/${serviceKey}/${action}`, { method: 'POST' })
       // 轮询状态直到变化或超时
-      const maxPolls = serviceKey === 'stable_diffusion' && action === 'start' ? 40 : 15
+      const maxPolls = 15
       for (let i = 0; i < maxPolls; i++) {
         await new Promise(r => setTimeout(r, 2000))
         try {
