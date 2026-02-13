@@ -14,12 +14,43 @@ interface HealthInfo { status: string; version: string; device: string }
 interface ConfigInfo {
   asr: { model: string; language: string | null; device: string }
   ocr: { engine: string; languages: string[] }
-  ai: { provider: string; model: string; fallback_providers: string[]; has_api_key: boolean }
+  ai: { provider: string; model: string; fallback_providers: string[]; has_api_key: boolean; prompt_template: string }
   video_analysis: { level: string }
   output: { format: string }
   export: { google_docs: { enabled: boolean; folder_name: string; has_credentials: boolean; has_token: boolean } }
   timeouts: { pipeline: number; ffmpeg: number; transcribe: number }
   paths: { data: string; output: string; model_cache: string }
+}
+
+interface PromptWithStats {
+  name: string
+  label: string
+  stage: string
+  icon: string
+  total_calls: number
+  calls_1h: number
+  total_tokens: number
+  avg_duration_ms: number
+  cache_hit_rate: number
+  error_count: number
+  last_call_at?: number
+  file_lines: number
+}
+
+interface PromptSummary {
+  total_calls: number
+  total_tokens: number
+  cache_hit_rate: number
+  avg_success_rate: number
+  estimated_cost_usd: number
+}
+
+interface PromptDetail extends PromptWithStats {
+  content: string
+  system_prompt: string
+  variables: string[]
+  file_size_bytes?: number
+  recent_calls: Array<{ ts: number; duration_ms: number; total_tokens: number; success: boolean; error?: string; cache_hit: boolean }>
 }
 
 interface ServiceStatus {
@@ -55,30 +86,84 @@ function fmtSec(sec: number): string {
   return `${sec} 秒`
 }
 
+function formatAgo(ts: number): string {
+  const ago = Math.round(Date.now() / 1000 - ts)
+  if (ago < 0) return '刚刚'
+  if (ago < 60) return `${ago}s前`
+  if (ago < 3600) return `${Math.round(ago / 60)}m前`
+  if (ago < 86400) return `${Math.round(ago / 3600)}h前`
+  return `${Math.round(ago / 86400)}d前`
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 60000) return `${(ms / 60000).toFixed(1)}min`
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
+  return `${ms}ms`
+}
+
+function formatCost(usd: number): string {
+  if (usd < 0.01) return `$${usd.toFixed(4)}`
+  return `$${usd.toFixed(2)}`
+}
+
 // ── 主页面 ──
 
 export default function SettingsPage() {
   const [health, setHealth] = useState<HealthInfo | null>(null)
   const [config, setConfig] = useState<ConfigInfo | null>(null)
   const [status, setStatus] = useState<StatusMap | null>(null)
+  const [prompts, setPrompts] = useState<PromptWithStats[]>([])
+  const [promptSummary, setPromptSummary] = useState<PromptSummary | null>(null)
+  const [promptSelected, setPromptSelected] = useState<string | null>(null)
+  const [promptDetail, setPromptDetail] = useState<PromptDetail | null>(null)
+  const [promptDetailLoading, setPromptDetailLoading] = useState(false)
+  const [lastPromptRefresh, setLastPromptRefresh] = useState('--:--:--')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   const fetchAll = useCallback(async () => {
     try {
-      const [h, c, s] = await Promise.all([
+      const [h, c, s, pData] = await Promise.all([
         fetch(`${API_URL}/health`).then(r => r.json()),
         fetch(`${API_URL}/api/config`).then(r => r.json()),
         fetch(`${API_URL}/api/status`).then(r => r.json()),
+        fetch(`${API_URL}/api/prompts`).then(r => r.json()).then(d => ({ prompts: d.prompts || [], summary: d.summary || null })).catch(() => ({ prompts: [], summary: null })),
       ])
-      setHealth(h); setConfig(c); setStatus(s); setError('')
+      setHealth(h); setConfig(c); setStatus(s)
+      setPrompts(pData.prompts); setPromptSummary(pData.summary); setError('')
+      setLastPromptRefresh(new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }))
     } catch { setError('无法连接后端服务') }
     finally { setLoading(false) }
   }, [])
 
+  const handleSelectPrompt = useCallback(async (name: string) => {
+    if (promptSelected === name) {
+      setPromptSelected(null)
+      setPromptDetail(null)
+      return
+    }
+    setPromptSelected(name)
+    setPromptDetailLoading(true)
+    try {
+      const r = await fetch(`${API_URL}/api/prompts/${encodeURIComponent(name)}`)
+      const d = await r.json()
+      setPromptDetail(d as PromptDetail)
+    } catch {
+      setPromptDetail(null)
+    } finally {
+      setPromptDetailLoading(false)
+    }
+  }, [promptSelected])
+
   useEffect(() => {
     fetchAll()
-    const iv = setInterval(fetchAll, 10000)
+    const iv = setInterval(fetchAll, 30000)
     return () => clearInterval(iv)
   }, [fetchAll])
 
@@ -148,15 +233,68 @@ export default function SettingsPage() {
                   location="cloud"
                 />
               </div>
-              {/* 链路 */}
-              <div className="mt-4 flex items-center gap-3 text-sm sm:text-base text-text-tertiary flex-wrap">
-                <span>调用链路</span>
-                {[config?.ai.provider, ...(config?.ai.fallback_providers || [])].filter((v, i, a) => a.indexOf(v) === i).map((p, i, arr) => (
-                  <span key={p} className="flex items-center gap-2">
-                    <span className={`font-semibold ${i === 0 ? 'text-emerald-400' : 'text-text-secondary'}`}>{p}</span>
-                    {i < arr.length - 1 && <span className="text-text-tertiary/50">→</span>}
-                  </span>
-                ))}
+              {/* 链路 + 当前 Prompt 模板 */}
+              <div className="mt-4 space-y-2">
+                <div className="flex items-center gap-3 text-sm sm:text-base text-text-tertiary flex-wrap">
+                  <span>调用链路</span>
+                  {[config?.ai.provider, ...(config?.ai.fallback_providers || [])].filter((v, i, a) => a.indexOf(v) === i).map((p, i, arr) => (
+                    <span key={p} className="flex items-center gap-2">
+                      <span className={`font-semibold ${i === 0 ? 'text-emerald-400' : 'text-text-secondary'}`}>{p}</span>
+                      {i < arr.length - 1 && <span className="text-text-tertiary/50">→</span>}
+                    </span>
+                  ))}
+                </div>
+                <div className="text-sm text-text-tertiary">
+                  当前 Prompt 模板：<span className="font-mono text-text-secondary">{config?.ai.prompt_template ?? 'summarize'}</span>
+                </div>
+              </div>
+            </section>
+
+            {/* ── Prompt 监控（对标 KKline：行内展开、Tab 详情、缓存条） ── */}
+            <section>
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2 mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-text-primary tracking-tight">Prompt 监控</h2>
+                  <p className="text-base text-text-tertiary mt-1">AI 模板调用统计与分析 · 点击行展开详情</p>
+                </div>
+                <span className="text-sm text-text-tertiary font-mono">{lastPromptRefresh}</span>
+              </div>
+              {/* 汇总卡片 */}
+              {promptSummary && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                  <SummaryCard label="总调用次数" value={String(promptSummary.total_calls)} icon="📞" />
+                  <SummaryCard label="总 Token 消耗" value={formatTokens(promptSummary.total_tokens)} sub={formatCost(promptSummary.estimated_cost_usd)} icon="🪙" color="text-emerald-400" />
+                  <SummaryCard label="缓存命中率" value={`${Math.round(promptSummary.cache_hit_rate * 100)}%`} icon="⚡" color={promptSummary.cache_hit_rate >= 0.3 ? 'text-emerald-400' : 'text-amber-400'} />
+                  <SummaryCard label="成功率" value={`${Math.round(promptSummary.avg_success_rate * 100)}%`} icon="✅" color={promptSummary.avg_success_rate >= 0.95 ? 'text-emerald-400' : promptSummary.avg_success_rate >= 0.8 ? 'text-amber-400' : 'text-red-400'} />
+                </div>
+              )}
+              <div className="space-y-1.5">
+                {prompts.length === 0 ? (
+                  <div className="px-6 py-8 text-center text-text-tertiary text-sm rounded-xl bg-white/[0.02] border border-white/[0.06]">暂无模板，请在后端 deepdistill/ai_analysis/prompts/ 目录添加 .txt 文件</div>
+                ) : (
+                  prompts.map((t: PromptWithStats) => (
+                    <div key={t.name}>
+                      <PromptRow
+                        prompt={t}
+                        selected={promptSelected === t.name}
+                        isActive={config?.ai.prompt_template === t.name}
+                        onSelect={() => handleSelectPrompt(t.name)}
+                        formatAgo={formatAgo}
+                        formatTokens={formatTokens}
+                        formatDuration={formatDuration}
+                      />
+                      {promptSelected === t.name && (
+                        <div className="mt-0 rounded-b-xl overflow-hidden border border-t-0 border-white/[0.06] bg-white/[0.01]">
+                          {promptDetailLoading ? (
+                            <div className="px-6 py-12 text-center text-text-tertiary">加载中...</div>
+                          ) : promptDetail ? (
+                            <PromptDetailPanel detail={promptDetail} onClose={() => { setPromptSelected(null); setPromptDetail(null) }} formatAgo={formatAgo} formatTokens={formatTokens} formatDuration={formatDuration} />
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             </section>
 
@@ -274,6 +412,21 @@ function SectionHeader({ title, subtitle }: { title: string; subtitle: string })
     <div className="mb-6">
       <h2 className="text-2xl font-bold text-text-primary tracking-tight">{title}</h2>
       <p className="text-base text-text-tertiary mt-1">{subtitle}</p>
+    </div>
+  )
+}
+
+function SummaryCard({ label, value, sub, icon, color }: {
+  label: string; value: string; sub?: string; icon: string; color?: string
+}) {
+  return (
+    <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-4 flex items-center gap-3">
+      <span className="text-2xl">{icon}</span>
+      <div>
+        <div className="text-xs text-text-tertiary uppercase tracking-wider">{label}</div>
+        <div className={`text-lg font-bold font-mono ${color || 'text-text-primary'}`}>{value}</div>
+        {sub && <div className="text-xs text-text-tertiary mt-0.5">{sub}</div>}
+      </div>
     </div>
   )
 }
@@ -462,6 +615,172 @@ function DetailRow({ label, value, ok }: { label: string; value: string; ok?: bo
       }`}>
         {value}
       </span>
+    </div>
+  )
+}
+
+/** 单行 Prompt 模板（对标 KKline：点击展开、箭头、缓存条） */
+function PromptRow({
+  prompt,
+  selected,
+  isActive,
+  onSelect,
+  formatAgo,
+  formatTokens,
+  formatDuration,
+}: {
+  prompt: PromptWithStats
+  selected: boolean
+  isActive: boolean
+  onSelect: () => void
+  formatAgo: (ts: number) => string
+  formatTokens: (n: number) => string
+  formatDuration: (ms: number) => string
+}) {
+  const { name, label, stage, icon, total_calls, calls_1h, total_tokens, avg_duration_ms, cache_hit_rate, error_count, last_call_at, file_lines } = prompt
+  const cachePct = Math.round(cache_hit_rate * 100)
+  return (
+    <div
+      className={`flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl cursor-pointer transition-all border ${
+        selected ? 'border-violet-500/40 bg-violet-500/5' : 'border-white/[0.06] bg-white/[0.02] hover:border-white/[0.12] hover:bg-white/[0.03]'
+      }`}
+      onClick={onSelect}
+    >
+      <div className="min-w-0 flex-1 flex items-center gap-2.5">
+        <span className="text-xl">{icon}</span>
+        <div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-text-primary">{label}</span>
+            <span className="text-[11px] px-2 py-0.5 rounded bg-violet-500/15 text-violet-400 font-medium">{stage}</span>
+            {isActive && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400">当前使用</span>}
+          </div>
+          <div className="text-xs text-text-tertiary font-mono mt-0.5">{stage} {name}.txt · {file_lines}行</div>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-4 sm:gap-5 text-sm shrink-0">
+        <StatCell label="1H调用" value={`${calls_1h}（总${total_calls}）`} color={calls_1h > 0 ? 'text-emerald-400' : undefined} />
+        <StatCell label="TOKEN" value={formatTokens(total_tokens)} color={total_tokens > 0 ? 'text-emerald-400' : undefined} />
+        <StatCell label="平均耗时" value={avg_duration_ms > 0 ? formatDuration(avg_duration_ms) : '--'} color={avg_duration_ms > 0 ? 'text-amber-400' : undefined} />
+        <div className="flex flex-col items-center min-w-[70px]">
+          <span className="text-text-tertiary text-[11px] uppercase tracking-wider mb-1">缓存命中</span>
+          <div className="flex items-center gap-1.5">
+            <div className="w-10 h-1 rounded-full bg-white/10 overflow-hidden">
+              <div className="h-full rounded-full bg-emerald-400/80 transition-all" style={{ width: `${cachePct}%` }} />
+            </div>
+            <span className={`text-xs font-mono ${cachePct > 0 ? 'text-emerald-400' : 'text-text-tertiary'}`}>{cachePct}%</span>
+          </div>
+        </div>
+        <StatCell label="错误" value={String(error_count)} color={error_count > 0 ? 'text-red-400' : 'text-emerald-400'} />
+        <StatCell label="最后调用" value={last_call_at ? formatAgo(last_call_at) : '--'} />
+      </div>
+      <div className="text-text-tertiary text-sm shrink-0 w-5 text-center">{selected ? '▼' : '▶'}</div>
+    </div>
+  )
+}
+
+/** 详情面板（对标 KKline：Tab 切换、语法高亮、调用记录表） */
+function PromptDetailPanel({
+  detail,
+  onClose,
+  formatAgo,
+  formatTokens,
+  formatDuration,
+}: {
+  detail: PromptDetail
+  onClose: () => void
+  formatAgo: (ts: number) => string
+  formatTokens: (n: number) => string
+  formatDuration: (ms: number) => string
+}) {
+  const [tab, setTab] = useState<'prompt' | 'system' | 'calls'>('prompt')
+  const d = detail
+  return (
+    <div className="border-t border-white/[0.06]">
+      <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-white/[0.06]">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">{d.icon}</span>
+          <span className="font-semibold text-text-primary">{d.label}</span>
+          <span className="text-xs px-2 py-0.5 rounded bg-violet-500/15 text-violet-400">{d.stage}</span>
+        </div>
+        <button type="button" onClick={onClose} className="text-text-tertiary hover:text-text-primary text-lg leading-none p-2 rounded-lg hover:bg-white/[0.06]">×</button>
+      </div>
+      <div className="flex gap-1 px-4 sm:px-6 py-2 border-b border-white/[0.04] text-sm">
+        <span className="text-text-tertiary font-mono">📄 {d.name}.txt</span>
+        <span className="text-text-tertiary">·</span>
+        <span className="text-text-tertiary">{d.file_lines} 行</span>
+        {(d.file_size_bytes ?? 0) > 0 && <><span className="text-text-tertiary">·</span><span className="text-text-tertiary">{((d.file_size_bytes ?? 0) / 1024).toFixed(1)}KB</span></>}
+        {d.variables?.length > 0 && <><span className="text-text-tertiary">·</span><span className="text-text-tertiary">变量: {d.variables.join(', ')}</span></>}
+      </div>
+      <div className="flex border-b border-white/[0.06]">
+        {(['prompt', 'system', 'calls'] as const).map((t) => (
+          <button key={t} type="button" onClick={() => setTab(t)} className={`px-4 sm:px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
+            tab === t ? 'text-emerald-400 border-emerald-400/60' : 'text-text-tertiary border-transparent hover:text-text-secondary'
+          }`}>
+            {t === 'prompt' ? 'Prompt 模板' : t === 'system' ? 'System Prompt' : `调用记录 (${d.recent_calls?.length ?? 0})`}
+          </button>
+        ))}
+      </div>
+      <div className="p-4 sm:p-6 max-h-[400px] overflow-auto">
+        {tab === 'prompt' && (
+          <pre className="text-sm text-text-secondary whitespace-pre-wrap font-mono break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: highlightPrompt(d.content || '（文件为空）') }} />
+        )}
+        {tab === 'system' && (
+          <pre className="text-sm text-text-secondary whitespace-pre-wrap font-mono break-words leading-relaxed" dangerouslySetInnerHTML={{ __html: highlightPrompt(d.system_prompt || '（无 System Prompt）') }} />
+        )}
+        {tab === 'calls' && (
+          <div>
+            {!d.recent_calls?.length ? (
+              <div className="py-8 text-center text-text-tertiary text-sm">暂无调用记录</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-text-tertiary text-xs uppercase tracking-wider border-b border-white/[0.06]">
+                    <th className="py-2 pr-4">时间</th>
+                    <th className="py-2 pr-4">耗时</th>
+                    <th className="py-2 pr-4">Token</th>
+                    <th className="py-2 pr-4">缓存</th>
+                    <th className="py-2">结果</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.recent_calls.map((c, i) => (
+                    <tr key={i} className="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                      <td className="py-2 pr-4 font-mono text-text-secondary">{new Date(c.ts * 1000).toLocaleTimeString('zh-CN', { hour12: false })}</td>
+                      <td className="py-2 pr-4 font-mono">{c.cache_hit ? '--' : formatDuration(c.duration_ms)}</td>
+                      <td className="py-2 pr-4 font-mono text-emerald-400">{c.total_tokens > 0 ? formatTokens(c.total_tokens) : '--'}</td>
+                      <td className="py-2 pr-4">{c.cache_hit ? <span className="text-emerald-400">命中</span> : '未命中'}</td>
+                      <td className="py-2">{c.success ? <span className="text-emerald-400">成功</span> : <span className="text-red-400" title={c.error || ''}>失败</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function highlightPrompt(raw: string): string {
+  const esc = raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return esc.split('\n').map((line) => {
+    if (/^#{1,4}\s/.test(line)) return `<span class="text-violet-400 font-semibold">${line}</span>`
+    if (/^\s*(\/\/|#[^#])/.test(line)) return `<span class="text-zinc-500 italic">${line}</span>`
+    return line
+      .replace(/(\{[a-zA-Z_][a-zA-Z0-9_]*\})/g, '<span class="text-amber-400 font-semibold">$1</span>')
+      .replace(/(&quot;[^&]*?&quot;)\s*:/g, '<span class="text-sky-400">$1</span>:')
+      .replace(/:\s*(&quot;[^&]*?&quot;)/g, ': <span class="text-emerald-300">$1</span>')
+      .replace(/\b(\d+\.?\d*)\b/g, '<span class="text-orange-400">$1</span>')
+      .replace(/\b(true|false|null|none|None|True|False)\b/gi, '<span class="text-pink-400 italic">$1</span>')
+  }).join('\n')
+}
+
+function StatCell({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-text-tertiary text-xs uppercase">{label}</span>
+      <span className={`font-mono font-semibold ${color || 'text-text-secondary'}`}>{value}</span>
     </div>
   )
 }

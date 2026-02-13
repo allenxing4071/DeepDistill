@@ -31,6 +31,8 @@ ai:
     - qwen
   # 短内容阈值（字符数），低于此值尝试用本地模型
   local_threshold: 2000
+  # Prompt 模板名（deepdistill/ai_analysis/prompts/ 下 .txt 文件名不含后缀，如 summarize）
+  prompt_template: summarize
 
 # ── 视频分析 ──
 video_analysis:

@@ -77,15 +77,28 @@
 - Prompt 文件使用中文说明用途，提示词本身可用英文
 - 每个 Prompt 文件顶部标注：用途、输入格式、期望输出格式
 
-### Prompt 模板清单（规划）
+### Prompt 模板清单
 
 | 文件 | 用途 |
 |---|---|
-| `summarize.txt` | 通用内容摘要 |
+| `summarize.txt` | 通用内容摘要（默认） |
 | `extract_structure.txt` | 提取文档结构与层级 |
 | `extract_keywords.txt` | 关键词与标签提取 |
 | `video_narrate.txt` | 视频内容叙述（结合视觉分析） |
 | `merge_sources.txt` | 多源内容融合提炼 |
+
+### 模板管理 API
+
+- `list_prompt_templates()` — 列出 prompts 目录下所有 .txt 模板（供设置页/API 使用）
+- `get_prompt_content(name)` — 获取指定模板内容，禁止路径穿越
+- 配置项：`ai.prompt_template` / `AI_PROMPT_TEMPLATE` 指定默认模板名
+
+### Prompt 统计（prompt_stats）
+
+- 采集器：`ai_analysis/prompt_stats.py`
+- 记录：调用频率、Token 消耗、耗时、缓存命中率、错误信息
+- 持久化：`data/prompt_stats.json`
+- 设置页：通过 `/api/config` / 设置页面展示统计
 
 ---
 
@@ -108,6 +121,14 @@
 - [ ] 多语言内容正确识别语种
 
 ---
+
+## JSON 响应解析（_parse_json_response）
+
+LLM 有时输出带 markdown 代码块或前后缀，解析策略：
+1. 直接 `json.loads(response)` 尝试
+2. 提取 ` ```json ... ``` ` 代码块
+3. 提取首尾 `{` 和 `}` 之间的内容
+4. 失败时返回 `{summary: 前500字, key_points: [], keywords: [], parse_error: true}`
 
 ## 经验沉淀
 

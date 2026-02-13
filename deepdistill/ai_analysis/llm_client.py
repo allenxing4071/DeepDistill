@@ -50,8 +50,11 @@ def _call_single_provider(
     temperature: float,
     timeout: float,
     max_retries: int = 3,
-) -> str:
-    """调用单个 LLM provider，带指数退避重试（网络抖动/临时故障），失败时抛出异常"""
+) -> tuple[str, dict]:
+    """
+    调用单个 LLM provider，带指数退避重试。
+    返回 (content, usage_dict)，usage_dict 含 prompt_tokens/completion_tokens/total_tokens。
+    """
     import time
     from openai import OpenAI
 
@@ -90,8 +93,16 @@ def _call_single_provider(
             )
 
             result = response.choices[0].message.content or ""
+            usage = {}
+            if getattr(response, "usage", None):
+                u = response.usage
+                usage = {
+                    "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
+                    "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
+                    "total_tokens": getattr(u, "total_tokens", 0) or 0,
+                }
             logger.info(f"LLM 响应 ({provider}/{use_model}): {len(result)} 字符")
-            return result
+            return result, usage
 
         except Exception as e:
             last_error = e
@@ -113,32 +124,25 @@ def call_llm(
     max_tokens: int = 4096,
     temperature: float = 0.3,
     timeout: float | None = None,
-) -> str:
+) -> tuple[str, dict]:
     """
-    调用 LLM API，返回文本响应。
+    调用 LLM API，返回 (文本响应, usage_dict)。
+    usage_dict 含 prompt_tokens/completion_tokens/total_tokens（部分 provider 可能无）。
     支持 Ollama（本地）/ DeepSeek / Qwen，自动 fallback。
-
-    fallback 逻辑：
-    - 若指定了 provider，仅调用该 provider（不 fallback）
-    - 若未指定，按 cfg.AI_PROVIDER -> cfg.AI_FALLBACK_PROVIDERS 顺序尝试
     """
     from ..config import cfg
 
-    # 确定超时（Ollama 本地推理较慢，默认 120s；云端 60s）
     if timeout is None:
         primary = provider or cfg.AI_PROVIDER
         timeout = 120.0 if primary == "ollama" else 60.0
 
-    # 若明确指定了 provider，直接调用（不 fallback）
     if provider:
         return _call_single_provider(
             prompt, system_prompt, provider, model, max_tokens, temperature, timeout
         )
 
-    # 构建 fallback 链：主 provider + fallback providers
     providers_chain = [cfg.AI_PROVIDER] + cfg.AI_FALLBACK_PROVIDERS
-    # 去重并保持顺序
-    seen = set()
+    seen: set[str] = set()
     unique_chain = []
     for p in providers_chain:
         if p not in seen:
@@ -148,7 +152,6 @@ def call_llm(
     last_error = None
     for i, prov in enumerate(unique_chain):
         try:
-            # fallback 时使用对应 provider 的默认模型，而非主 provider 的模型
             use_model = model if i == 0 else None
             use_timeout = 120.0 if prov == "ollama" else 60.0
             return _call_single_provider(
@@ -157,9 +160,8 @@ def call_llm(
         except Exception as e:
             last_error = e
             if i < len(unique_chain) - 1:
-                next_prov = unique_chain[i + 1]
-                logger.warning(f"LLM {prov} 调用失败: {e}，fallback 到 {next_prov}")
+                logger.warning("LLM %s 调用失败: %s，fallback 到 %s", prov, e, unique_chain[i + 1])
             else:
-                logger.error(f"LLM {prov} 调用失败: {e}，已无可用 fallback")
+                logger.error("LLM %s 调用失败: %s，已无可用 fallback", prov, e)
 
     raise RuntimeError(f"所有 LLM provider 均调用失败，最后错误: {last_error}")

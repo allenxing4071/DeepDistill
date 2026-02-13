@@ -280,6 +280,73 @@ category_keywords = {
 }
 ```
 
+## 测试
+
+### 运行测试
+
+```bash
+cd ~/Documents/soft/DeepDistill
+source .venv/bin/activate
+
+# 运行全部测试
+pytest tests/ -v
+
+# 运行指定文件
+pytest tests/test_api.py -v
+
+# 运行指定类
+pytest tests/test_api.py::TestHealthEndpoint -v
+
+# 显示 print 输出
+pytest tests/ -v -s
+
+# 覆盖率（需 pytest-cov）
+pytest tests/ -v --cov=deepdistill --cov-report=term-missing
+```
+
+### 测试结构
+
+| 文件 | 覆盖模块 | 说明 |
+|---|---|---|
+| `test_api.py` | FastAPI 端点 | 健康检查/配置/任务/处理/导出 |
+| `test_pipeline.py` | `pipeline.py` | ProcessingResult 数据结构与序列化 |
+| `test_fusion.py` | `fusion/formatters/` | Markdown / JSON / Skill 格式化 |
+| `test_ingestion.py` | `ingestion/router.py` | 文件格式识别、路由 |
+| `test_export_title.py` | `export/google_docs.py` | 中文标题、自动分类 |
+| `test_ai_analysis.py` | `ai_analysis/` | extractor / prompt_stats 工具函数 |
+| `test_config.py` | `config.py` | 路径与配置属性 |
+
+### 运行环境
+
+推荐在项目 venv 中运行，避免全局 Python 的 web3/eth_typing 等插件冲突：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+pytest tests/ -v
+```
+
+### 测试原则
+
+- **不依赖外部服务**：conftest.py 中设置 mock API Key，LLM/Google 等调用需 mock
+- **单元测试优先**：纯函数、数据结构、格式化逻辑可无 mock 直接测
+- **关键路径必测**：管线结果、导出标题、分类、JSON 解析
+- **新增模块必补测**：R1.7 要求重大功能需补测试
+
+### 添加新测试
+
+```python
+# 示例：测试 extractor 的 list_prompt_templates
+def test_list_prompt_templates_returns_list():
+    from deepdistill.ai_analysis.extractor import list_prompt_templates
+    result = list_prompt_templates()
+    assert isinstance(result, list)
+    for item in result:
+        assert "name" in item
+        assert "description" in item
+```
+
 ## 常见问题
 
 ### faster-whisper MPS 不支持

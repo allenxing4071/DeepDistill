@@ -198,6 +198,38 @@ async def get_config():
     return cfg.to_dict()
 
 
+# ── Prompt 模板与监控（与 KKline 一致） ──
+@app.get("/api/prompts")
+async def list_prompts():
+    """列出所有 prompt 模板及其调用统计（含汇总）"""
+    from .ai_analysis.prompt_stats import prompt_stats
+    return {
+        "prompts": prompt_stats.snapshot(),
+        "summary": prompt_stats.summary(),
+    }
+
+
+@app.get("/api/prompts/stats/summary")
+async def prompts_summary():
+    """Prompt 调用全局汇总"""
+    from .ai_analysis.prompt_stats import prompt_stats
+    return prompt_stats.summary()
+
+
+@app.get("/api/prompts/{name}")
+async def get_prompt(name: str):
+    """获取单个 prompt 详情（含模板内容、调用记录、统计）"""
+    from .ai_analysis.extractor import get_prompt_content
+    from .ai_analysis.prompt_stats import prompt_stats
+
+    name_clean = name.strip().removesuffix(".txt") if name.endswith(".txt") else name.strip()
+    content = get_prompt_content(name_clean)
+    detail = prompt_stats.get_detail(name_clean)
+    if content is None and detail.get("file_lines", 0) == 0 and detail.get("total_calls", 0) == 0:
+        raise HTTPException(status_code=404, detail=f"Prompt 模板 '{name_clean}' 不存在")
+    return detail
+
+
 # ── 实时状态检测（各模型/服务连通性） ──
 @app.get("/api/status")
 async def get_status():

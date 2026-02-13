@@ -72,6 +72,19 @@ Layer 5: Fusion Engine（去重/合并/补全/格式化输出）
      └── [可选] 素材再生成
 ```
 
+## Skill 路由表（与 Rules 保持一致）
+
+| 用户意图 | 执行 Skill |
+|---|---|
+| 项目结构/怎么跑/入门 | 本 Skill |
+| 转录/ASR/OCR/文档提取 | `.skills/内容处理/SKILL.md` |
+| AI分析/提炼/LLM/prompt | `.skills/AI分析/SKILL.md` |
+| 视频分析/镜头/场景/风格 | `.skills/视频分析/SKILL.md` |
+| 部署/上线/Docker | `.skills/部署运维/SKILL.md` |
+| UI/前端/设计系统 | `.skills/UI/SKILL.md` |
+| 导出/Google Drive | `.skills/导出管理/SKILL.md` |
+| 新经验/踩坑 | `.skills/经验沉淀/SKILL.md` 路由到对应 Skill |
+
 ## 快速上手
 
 ### 安装
@@ -111,6 +124,18 @@ deepdistill config show
 | 动作识别 | MediaPipe / OpenPose | 本地 GPU/CPU | GPU 优先 |
 | 风格分析 | CLIP / Video Swin | 本地 GPU / API | GPU 16GB+ |
 | AI 提炼 | DeepSeek / Qwen | 本地 + API | GPU/CPU |
+
+## 关键文件索引
+
+| 模块 | 入口文件 | 说明 |
+|---|---|---|
+| 管线编排 | `pipeline.py` | DeepDistillPipeline.process() |
+| API 服务 | `api.py` | FastAPI 11 个端点 |
+| 输入路由 | `ingestion/router.py` | identify_file_type / route |
+| AI 提炼 | `ai_analysis/extractor.py` | extract_knowledge / list_prompt_templates |
+| LLM 调用 | `ai_analysis/llm_client.py` | call_llm / 三 provider fallback |
+| Prompt 统计 | `ai_analysis/prompt_stats.py` | prompt_stats.record / 监控页数据源 |
+| 配置 | `config.py` | cfg 单例 |
 
 ## 经验沉淀
 

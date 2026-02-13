@@ -67,6 +67,8 @@ class Config:
     AI_MODEL: str = _yaml.get("ai", {}).get("model", "qwen3:8b")
     AI_FALLBACK_PROVIDERS: list[str] = _yaml.get("ai", {}).get("fallback_providers", ["deepseek", "qwen"])
     AI_LOCAL_THRESHOLD: int = _yaml.get("ai", {}).get("local_threshold", 2000)
+    # Prompt 模板名（prompts/ 目录下 .txt 文件名不含后缀，与 KKline 一致）
+    AI_PROMPT_TEMPLATE: str = _yaml.get("ai", {}).get("prompt_template", "summarize")
 
     # 视频分析配置
     VIDEO_ANALYSIS_LEVEL: str = _yaml.get("video_analysis", {}).get("level", "off")
@@ -126,6 +128,7 @@ class Config:
                 "model": cls.AI_MODEL,
                 "fallback_providers": cls.AI_FALLBACK_PROVIDERS,
                 "has_api_key": bool(cls.DEEPSEEK_API_KEY or cls.QWEN_API_KEY),
+                "prompt_template": cls.AI_PROMPT_TEMPLATE,
             },
             "video_analysis": {"level": cls.VIDEO_ANALYSIS_LEVEL},
             "output": {"format": cls.OUTPUT_FORMAT},
