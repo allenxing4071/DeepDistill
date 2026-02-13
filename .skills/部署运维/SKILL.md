@@ -134,6 +134,7 @@ docker compose restart
 
 ## 四、部署操作速查
 
+### 本地 Docker 命令
 ```bash
 cd ~/Documents/soft/DeepDistill
 
@@ -154,6 +155,31 @@ openssl s_client -connect deepdistill.kline007.top:443 -servername deepdistill.k
 
 # 手动续期 SSL 证书
 docker exec aitrader-certbot certbot renew
+```
+
+### deploy.sh 脚本命令
+```bash
+cd ~/Documents/soft/DeepDistill
+
+# ——— 本地部署 ———
+./scripts/deploy.sh deploy      # 一键部署（全量重建）
+./scripts/deploy.sh backend     # 仅重建后端
+./scripts/deploy.sh frontend    # 仅重建前端
+./scripts/deploy.sh restart     # 快速重启
+./scripts/deploy.sh status      # 查看状态
+./scripts/deploy.sh logs        # 查看日志
+
+# ——— 远程 SSH 部署（自动检测 NAT 回环并 fallback）———
+./scripts/deploy.sh remote-deploy   # 同步代码 + 远程重建 + 健康检查
+./scripts/deploy.sh remote-status   # 查看远程容器状态
+./scripts/deploy.sh remote-logs     # 查看远程实时日志
+
+# 远程配置可通过环境变量覆盖：
+# REMOTE_HOST（默认 deepdistill.kline007.top）
+# REMOTE_PORT（默认 2222）
+# REMOTE_USER（默认 allenxing00）
+# REMOTE_PROJECT_DIR（默认 ~/Documents/soft/DeepDistill）
+# REMOTE_SSH_KEY（默认空，使用 SSH 密钥认证）
 ```
 
 ---
@@ -197,6 +223,34 @@ sudo apt install ffmpeg
 ---
 
 ## 经验沉淀
+
+### 经验：deploy.sh 远程 SSH 部署方案 + NAT 回环自动 fallback
+- 现象: 需要从外网通过 SSH 远程部署 DeepDistill（域名 deepdistill.kline007.top → 125.69.16.136 → 本机 Mac Studio）
+- 根因: 本机是家宽环境，需要路由器端口映射 + SSH 服务开启；从本机通过公网 IP 回连自己时 TP-Link TL-R479G+ 不支持 NAT 回环（Hairpin NAT），导致 `Connection reset by peer`
+- 解决:
+  1. macOS 开启 SSH：`sudo systemsetup -setremotelogin on`
+  2. 路由器端口映射：外网 2222 → 192.168.0.5:22 (TCP)，通过 TP-Link API 添加：
+     `curl -s -X POST 'http://192.168.0.1/stok=<token>/ds' -H 'Content-Type: application/json' -d '{"virtual_server":{"table":"virtual_server","para":{"name":"SSH_DeepDistill","interface":"WAN1","ext_port":"2222","int_port":"22","int_ip":"192.168.0.5","protocol":"TCP","state":"1"}},"method":"add"}'`
+  3. deploy.sh 新增 `remote-deploy/remote-status/remote-logs` 三个命令
+  4. 内置 `_resolve_ssh_target()` 智能检测：先尝试公网 SSH，失败则自动 fallback 到 `127.0.0.1:22`
+  5. macOS SSH 会话 PATH 不含 Docker Desktop 路径，`remote_ssh()` 自动注入 `export PATH=/usr/local/bin:/opt/homebrew/bin:$PATH`
+  6. 本机 fallback 且目录相同时自动跳过 rsync
+  7. 本机 SSH 密钥认证：将 `~/.ssh/id_ed25519.pub` 追加到 `~/.ssh/authorized_keys`
+- 验证: `./scripts/deploy.sh remote-status` 自动 fallback 并成功输出容器状态
+- 关联: R6(部署规范), scripts/deploy.sh, 路由器 TP-Link TL-R479G+ (192.168.0.1)
+- 日期: 2026-02-13
+
+### 经验：TP-Link TL-R479G+ 企业级路由器 API 操作
+- 现象: 需要通过脚本/命令行管理路由器端口映射，无需手动登录 Web 界面
+- 根因: TP-Link 企业级路由器提供 JSON API（`/stok=<token>/ds`），可直接 curl 操作
+- 解决:
+  1. 登录获取 stok token（从 Web 登录后 URL 中提取）
+  2. 添加虚拟服务器规则：`POST /stok=<token>/ds` + JSON body（method: add）
+  3. 查询规则：`POST /stok=<token>/ds` + JSON body（method: get）
+  4. 注意：stok 有时效性，过期需重新登录获取
+- 验证: API 返回 `{"error_code":0}` 表示成功
+- 关联: R6(部署规范), 路由器管理地址 http://192.168.0.1
+- 日期: 2026-02-13
 
 ### 经验：本机多项目 Docker 部署 + 统一 Nginx 反代
 - 现象: 本机（125.69.16.136）已运行多个项目（AITrader/AICoin/TradeDesk/KKline/FlowEdge），需要新增 DeepDistill

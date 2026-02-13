@@ -324,6 +324,7 @@ async def get_status():
 
     # 7. Stable Diffusion（图片生成 — 设计文档中的融合输出层组件）
     sd_url = os.getenv("SD_WEBUI_URL", "http://host.docker.internal:7860")
+    sd_detail = "未启动"
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(f"{sd_url}/sdapi/v1/sd-models")
@@ -332,7 +333,20 @@ async def get_status():
             else:
                 results["stable_diffusion"] = {"status": "error", "detail": f"HTTP {r.status_code}"}
     except Exception:
-        results["stable_diffusion"] = {"status": "offline", "detail": "未启动"}
+        # 若存在 sd.result（宿主机 watcher 写入的失败原因），展示给用户
+        _sd_result_file = _SERVICE_CTL_DIR / "sd.result"
+        if _sd_result_file.exists():
+            try:
+                raw = _sd_result_file.read_text(encoding="utf-8").strip()
+                data = json.loads(raw) if raw else {}
+                if not data.get("ok") and data.get("msg"):
+                    sd_detail = data.get("msg", sd_detail)
+            except Exception:
+                pass
+        else:
+            # 无 result 文件时提示：可能宿主机未运行 service-watcher.sh
+            sd_detail = "未启动（需在宿主机运行 scripts/service-watcher.sh 后点击启动）"
+        results["stable_diffusion"] = {"status": "offline", "detail": sd_detail}
 
     # 8. 活跃任务数
     active = sum(1 for t in _tasks.values() if t["status"] in ("queued", "processing"))
@@ -576,8 +590,23 @@ async def _run_url_pipeline(task_id: str, url: str):
                 # ── 网页路径：httpx 抓取 HTML ──
                 task["progress"] = 5
                 task["step_label"] = "未检测到视频，正在抓取网页"
-                from .ingestion.web_fetcher import fetch_url
+                from .ingestion.web_fetcher import fetch_url, fetch_url_with_browser
+                from .processing import extract_text
+                from .ai_analysis.extractor import _is_likely_verification_or_empty_page
+
                 file_path = await loop.run_in_executor(None, fetch_url, url, upload_dir)
+
+                # 若得到的是验证页/无正文，用无头浏览器重新抓取真实渲染内容后再分析
+                text = extract_text(file_path, "webpage")
+                if _is_likely_verification_or_empty_page(text):
+                    try:
+                        task["step_label"] = "检测到验证页，使用浏览器重新抓取页面内容"
+                        file_path = await loop.run_in_executor(
+                            None, fetch_url_with_browser, url, upload_dir
+                        )
+                        logger.info(f"URL 任务 {task_id}: 浏览器抓取完成，继续分析")
+                    except Exception as e:
+                        logger.warning(f"URL 任务 {task_id}: 浏览器抓取失败，将使用原始结果: {e}")
 
                 task["progress"] = 10
                 task["step_label"] = "网页抓取完成，开始分析"
@@ -595,6 +624,7 @@ async def _run_url_pipeline(task_id: str, url: str):
             pipeline = Pipeline(
                 output_dir=cfg.OUTPUT_DIR,
                 intent=opts.get("intent", "content"),
+                doc_type=opts.get("doc_type", "doc"),
                 progress_callback=_on_progress,
             )
 
@@ -845,6 +875,7 @@ async def _run_pipeline(task_id: str, file_path: Path):
             pipeline = Pipeline(
                 output_dir=cfg.OUTPUT_DIR,
                 intent=opts.get("intent", "content"),
+                doc_type=opts.get("doc_type", "doc"),
                 progress_callback=_on_progress,
             )
 

@@ -10,6 +10,7 @@
 #   ./scripts/deploy.sh backend    # 仅重建后端
 #   ./scripts/deploy.sh frontend   # 仅重建前端
 #   ./scripts/deploy.sh restart    # 快速重启（不重建镜像）
+#   ./scripts/deploy.sh remote-deploy  # SSH 远程部署（同步代码 + 远程重建）
 #
 # 📊 状态命令:
 #   ./scripts/deploy.sh status     # 查看容器状态
@@ -50,6 +51,15 @@ HEALTH_URL_HTTPS="https://${DOMAIN}/health"
 # Nginx 配置（AITRADER 统一管理）
 NGINX_CONTAINER="aitrader-nginx"
 NGINX_CONF="$HOME/Documents/soft/AITRADER/nginx/nginx.conf"
+
+# 远程 SSH 部署配置（可通过环境变量覆盖）
+# 默认指向 deepdistill.kline007.top（125.69.16.136）→ Mac Studio 本机
+# 注意：从本机通过公网 IP 回连自己（NAT 回环）可能不通，脚本会自动 fallback 到内网
+REMOTE_HOST="${REMOTE_HOST:-deepdistill.kline007.top}"
+REMOTE_PORT="${REMOTE_PORT:-2222}"
+REMOTE_USER="${REMOTE_USER:-allenxing00}"
+REMOTE_PROJECT_DIR="${REMOTE_PROJECT_DIR:-/Users/allenxing00/Documents/soft/DeepDistill}"
+REMOTE_SSH_KEY="${REMOTE_SSH_KEY:-}"
 
 # 部署锁（防止并发部署）
 DEPLOY_LOCK="/tmp/deepdistill-deploy.lock"
@@ -111,6 +121,101 @@ check_docker() {
         err "Docker 未运行，请先启动 Docker Desktop"
         exit 1
     fi
+}
+
+# ============================================================================
+# 远程 SSH 检查与封装
+# ============================================================================
+check_remote_config() {
+    if [ -z "$REMOTE_HOST" ] || [ -z "$REMOTE_USER" ] || [ -z "$REMOTE_PROJECT_DIR" ]; then
+        err "远程部署配置不完整，请检查 REMOTE_HOST/REMOTE_USER/REMOTE_PROJECT_DIR"
+        exit 1
+    fi
+    if [ -n "$REMOTE_SSH_KEY" ] && [ ! -f "$REMOTE_SSH_KEY" ]; then
+        err "SSH 私钥不存在: $REMOTE_SSH_KEY"
+        exit 1
+    fi
+}
+
+# 检测是否为本机（NAT 回环场景），自动 fallback 到本地执行
+_is_local_machine() {
+    local resolved_ip
+    resolved_ip=$(python3 -c "import socket; print(socket.gethostbyname('$REMOTE_HOST'))" 2>/dev/null || echo "")
+    # 获取本机所有 IP
+    local local_ips
+    local_ips=$(python3 -c "
+import subprocess, re
+out = subprocess.check_output(['ifconfig'], text=True, errors='ignore')
+for line in out.splitlines():
+    m = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', line)
+    if m: print(m.group(1))
+" 2>/dev/null || echo "")
+    # 如果远程 IP 不在本机 IP 列表中，尝试 SSH 连通
+    if echo "$local_ips" | grep -qF "$resolved_ip" 2>/dev/null; then
+        return 1  # IP 匹配本机，但可能是公网 IP，仍需测试 SSH
+    fi
+    return 1  # 默认认为不是本机
+}
+
+_resolve_ssh_target() {
+    # 尝试通过公网连接，如果失败则 fallback 到内网 127.0.0.1:22
+    local test_opts=(-o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new -p "$REMOTE_PORT")
+    if [ -n "$REMOTE_SSH_KEY" ]; then
+        test_opts+=(-i "$REMOTE_SSH_KEY")
+    fi
+    if ssh "${test_opts[@]}" "${REMOTE_USER}@${REMOTE_HOST}" 'echo ok' &>/dev/null; then
+        RESOLVED_SSH_HOST="$REMOTE_HOST"
+        RESOLVED_SSH_PORT="$REMOTE_PORT"
+        return 0
+    fi
+    # Fallback: 尝试内网直连 22 端口
+    local fallback_opts=(-o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new -p 22)
+    if [ -n "$REMOTE_SSH_KEY" ]; then
+        fallback_opts+=(-i "$REMOTE_SSH_KEY")
+    fi
+    if ssh "${fallback_opts[@]}" "${REMOTE_USER}@127.0.0.1" 'echo ok' &>/dev/null; then
+        warn "公网 SSH 不通（NAT 回环），自动 fallback 到本机 127.0.0.1:22"
+        RESOLVED_SSH_HOST="127.0.0.1"
+        RESOLVED_SSH_PORT="22"
+        return 0
+    fi
+    err "SSH 连接失败：公网 ${REMOTE_HOST}:${REMOTE_PORT} 和本机 127.0.0.1:22 均不可达"
+    return 1
+}
+
+remote_ssh() {
+    local remote_cmd="$1"
+    # macOS SSH 会话 PATH 可能不含 Docker Desktop，注入常用路径
+    local path_prefix="export PATH=/usr/local/bin:/opt/homebrew/bin:\$PATH; "
+    local ssh_opts=(-p "$RESOLVED_SSH_PORT" -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30)
+    if [ -n "$REMOTE_SSH_KEY" ]; then
+        ssh_opts+=(-i "$REMOTE_SSH_KEY")
+    fi
+    ssh "${ssh_opts[@]}" "${REMOTE_USER}@${RESOLVED_SSH_HOST}" "${path_prefix}${remote_cmd}"
+}
+
+remote_rsync() {
+    local ssh_cmd="ssh -p ${RESOLVED_SSH_PORT} -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30"
+    if [ -n "$REMOTE_SSH_KEY" ]; then
+        ssh_cmd="${ssh_cmd} -i ${REMOTE_SSH_KEY}"
+    fi
+
+    # 如果是本机 fallback，rsync 仍然有效（本机到本机），但跳过以节省时间
+    if [ "$RESOLVED_SSH_HOST" = "127.0.0.1" ] && [ "$REMOTE_PROJECT_DIR" = "$PROJECT_ROOT" ]; then
+        log "本机 fallback 且目录相同，跳过 rsync"
+        return 0
+    fi
+
+    rsync -az --delete \
+        --exclude ".git/" \
+        --exclude ".venv/" \
+        --exclude "__pycache__/" \
+        --exclude "*.pyc" \
+        --exclude "data/" \
+        --exclude ".env" \
+        -e "$ssh_cmd" \
+        "$PROJECT_ROOT/" \
+        "${REMOTE_USER}@${RESOLVED_SSH_HOST}:${REMOTE_PROJECT_DIR}/"
 }
 
 # ============================================================================
@@ -388,6 +493,65 @@ do_ssl_check() {
 }
 
 # ============================================================================
+# 远程部署（SSH）
+# ============================================================================
+do_remote_deploy() {
+    check_remote_config
+    _resolve_ssh_target || exit 1
+    acquire_deploy_lock
+
+    echo ""
+    echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${CYAN}  DeepDistill 远程部署（SSH）${NC}"
+    echo -e "${BOLD}${CYAN}  目标: ${REMOTE_USER}@${RESOLVED_SSH_HOST}:${RESOLVED_SSH_PORT} → ${REMOTE_PROJECT_DIR}${NC}"
+    echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════${NC}"
+    echo ""
+
+    log "检查远程目录..."
+    remote_ssh "mkdir -p '$REMOTE_PROJECT_DIR'"
+
+    log "同步代码到远程..."
+    remote_rsync
+
+    log "远程重建并启动服务..."
+    remote_ssh "cd '$REMOTE_PROJECT_DIR' && docker compose -f docker-compose.yml up -d --build"
+
+    log "远程健康检查..."
+    remote_ssh "cd '$REMOTE_PROJECT_DIR' && for i in \$(seq 1 15); do code=\$(curl -s -o /dev/null -w '%{http_code}' 'http://localhost:${BACKEND_PORT}/health' 2>/dev/null || echo 000); if [ \"\$code\" = \"200\" ]; then echo 'health ok'; exit 0; fi; sleep 3; done; exit 1"
+
+    log "尝试重载远程 Nginx..."
+    remote_ssh "docker exec '$NGINX_CONTAINER' nginx -s reload >/dev/null 2>&1 || true"
+
+    release_deploy_lock
+
+    echo ""
+    ok "远程部署完成！"
+    echo ""
+    echo -e "  ${CYAN}连接方式${NC}: ${RESOLVED_SSH_HOST}:${RESOLVED_SSH_PORT}"
+    echo -e "  ${CYAN}Web UI${NC}:  https://${DOMAIN}"
+    echo -e "  ${CYAN}API${NC}:     https://${DOMAIN}/api/"
+    echo -e "  ${CYAN}API 文档${NC}: https://${DOMAIN}/docs"
+    echo -e "  ${CYAN}健康检查${NC}: https://${DOMAIN}/health"
+    echo ""
+}
+
+do_remote_status() {
+    check_remote_config
+    _resolve_ssh_target || exit 1
+    echo ""
+    log "远程状态: ${REMOTE_USER}@${RESOLVED_SSH_HOST}:${RESOLVED_SSH_PORT} → ${REMOTE_PROJECT_DIR}"
+    remote_ssh "cd '$REMOTE_PROJECT_DIR' && docker compose -f docker-compose.yml ps"
+}
+
+do_remote_logs() {
+    check_remote_config
+    _resolve_ssh_target || exit 1
+    echo ""
+    log "远程日志跟踪: ${REMOTE_USER}@${RESOLVED_SSH_HOST}:${RESOLVED_SSH_PORT} → ${REMOTE_PROJECT_DIR}"
+    remote_ssh "cd '$REMOTE_PROJECT_DIR' && docker compose -f docker-compose.yml logs -f --tail=100"
+}
+
+# ============================================================================
 # 交互式菜单
 # ============================================================================
 show_menu() {
@@ -413,7 +577,12 @@ show_menu() {
     echo -e "    ${GREEN}9${NC}) clean      清理废弃镜像"
     echo -e "    ${GREEN}0${NC}) nginx      重载 Nginx"
     echo ""
-    echo -ne "  请选择 [0-9]: "
+    echo -e "  ${BOLD}远程命令:${NC}"
+    echo -e "    ${GREEN}a${NC}) remote-deploy  SSH 远程部署"
+    echo -e "    ${GREEN}b${NC}) remote-status  SSH 查看远程状态"
+    echo -e "    ${GREEN}c${NC}) remote-logs    SSH 查看远程日志"
+    echo ""
+    echo -ne "  请选择 [0-9/a-c]: "
     read -r choice
 
     case "$choice" in
@@ -427,6 +596,9 @@ show_menu() {
         8|stop)     do_stop ;;
         9|clean)    do_clean ;;
         0|nginx)    do_nginx_reload ;;
+        a|remote-deploy) do_remote_deploy ;;
+        b|remote-status) do_remote_status ;;
+        c|remote-logs)   do_remote_logs ;;
         *)          err "无效选择: $choice" ;;
     esac
 }
@@ -449,6 +621,9 @@ main() {
         clean|c)        do_clean ;;
         nginx|n)        do_nginx_reload ;;
         ssl-check|ssl)  do_ssl_check ;;
+        remote-deploy|rd)  do_remote_deploy ;;
+        remote-status|rs)  do_remote_status ;;
+        remote-logs|rl)    do_remote_logs ;;
         help|--help|-h)
             echo "用法: $0 <command>"
             echo ""
@@ -470,6 +645,14 @@ main() {
             echo "  clean, c        清理废弃镜像"
             echo "  nginx, n        重载 Nginx"
             echo "  ssl-check, ssl  检查 SSL 证书"
+            echo ""
+            echo "远程命令:"
+            echo "  remote-deploy, rd  SSH 远程部署（同步代码 + 远程重建）"
+            echo "  remote-status, rs  SSH 查看远程容器状态"
+            echo "  remote-logs, rl    SSH 查看远程实时日志"
+            echo ""
+            echo "远程环境变量（可选覆盖）:"
+            echo "  REMOTE_HOST, REMOTE_PORT, REMOTE_USER, REMOTE_PROJECT_DIR, REMOTE_SSH_KEY"
             echo ""
             echo "无参数则显示交互式菜单"
             ;;

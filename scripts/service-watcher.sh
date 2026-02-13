@@ -2,12 +2,14 @@
 # 宿主机服务控制 watcher
 # 监听 data/.service-ctl/ 目录下的信号文件，执行对应的启停操作。
 # 用法：在宿主机上运行 ./scripts/service-watcher.sh（后台常驻）
+# 注意：DeepDistill 跑在 Docker 时，必须在本机单独运行此脚本，否则「启动服务」不会生效。
 
 set -e
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 CTL_DIR="$PROJECT_DIR/data/.service-ctl"
-SD_DIR="$PROJECT_DIR/../stable-diffusion-webui-forge"
+# SD 目录：优先用环境变量 SD_WEBUI_DIR，否则默认与 DeepDistill 同级的 stable-diffusion-webui-forge
+SD_DIR="${SD_WEBUI_DIR:-$PROJECT_DIR/../stable-diffusion-webui-forge}"
 LOG_FILE="$PROJECT_DIR/data/service-watcher.log"
 
 mkdir -p "$CTL_DIR"
@@ -84,12 +86,21 @@ start_sd() {
     return
   fi
   if [ ! -d "$SD_DIR" ]; then
-    log "SD WebUI 目录不存在: $SD_DIR"
-    echo '{"ok":false,"msg":"SD WebUI not installed"}' > "$CTL_DIR/sd.result"
+    log "SD WebUI 目录不存在: $SD_DIR（可设置环境变量 SD_WEBUI_DIR 指定路径）"
+    echo "{\"ok\":false,\"msg\":\"SD WebUI 未安装或路径错误，请设置 SD_WEBUI_DIR 或放置于 $SD_DIR\"}" > "$CTL_DIR/sd.result"
     return
   fi
-  log "启动 SD WebUI Forge..."
-  cd "$SD_DIR" && nohup bash webui.sh > "$PROJECT_DIR/data/sd-webui.log" 2>&1 &
+  # 启动脚本：优先 webui.sh（Forge/AUTOMATIC1111），其次 launch.py
+  LAUNCHER=""
+  [ -f "$SD_DIR/webui.sh" ] && LAUNCHER="bash webui.sh"
+  [ -z "$LAUNCHER" ] && [ -f "$SD_DIR/launch.py" ] && LAUNCHER="python launch.py"
+  if [ -z "$LAUNCHER" ]; then
+    log "SD WebUI 目录内未找到 webui.sh 或 launch.py"
+    echo '{"ok":false,"msg":"SD WebUI 目录内无 webui.sh 或 launch.py"}' > "$CTL_DIR/sd.result"
+    return
+  fi
+  log "启动 SD WebUI: $LAUNCHER"
+  cd "$SD_DIR" && nohup $LAUNCHER > "$PROJECT_DIR/data/sd-webui.log" 2>&1 &
   # 等待启动（最多 120 秒）
   for i in $(seq 1 40); do
     sleep 3

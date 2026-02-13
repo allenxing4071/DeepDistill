@@ -490,6 +490,13 @@ th {{ background: #f5f5f5; font-weight: bold; }}
 
         if ai_result.get("summary"):
             md_lines += ["## 摘要", "", ai_result["summary"], ""]
+        # 风格分析结果（intent=style 时 style_analysis 模板产出）
+        if ai_result.get("style_tags"):
+            md_lines += ["## 风格标签", "", " ".join(f"`{t}`" for t in ai_result["style_tags"]), ""]
+        if ai_result.get("visual_elements"):
+            md_lines += ["## 视觉元素", "", ai_result["visual_elements"], ""]
+        if ai_result.get("color_palette"):
+            md_lines += ["## 配色倾向", "", ai_result["color_palette"], ""]
         if ai_result.get("key_points"):
             md_lines += ["## 核心观点", ""]
             md_lines += [f"- {p}" for p in ai_result["key_points"]]
@@ -533,6 +540,24 @@ th {{ background: #f5f5f5; font-weight: bold; }}
             lines += ["## 知识要点", ""]
             for i, point in enumerate(key_points, 1):
                 lines.append(f"{i}. {point}")
+            lines.append("")
+
+        # 规则（Skill 模板 skill_digest 产出）
+        rules = ai.get("rules", [])
+        if rules:
+            lines += ["## 规则", ""]
+            for i, r in enumerate(rules, 1):
+                lines.append(f"{i}. {r}")
+            lines.append("")
+
+        # 实践步骤（Skill 模板 skill_digest 产出）
+        steps = ai.get("steps", [])
+        if steps:
+            lines += ["## 实践步骤", ""]
+            for s in steps:
+                title = s.get("title", "")
+                summary = s.get("summary", "")
+                lines.append(f"- **{title}**: {summary}")
             lines.append("")
 
         # 内容结构
@@ -670,12 +695,12 @@ th {{ background: #f5f5f5; font-weight: bold; }}
             if category not in self.CATEGORIES:
                 logger.info(f"使用自定义分类目录「{category}」")
 
-        def _export_one(md_content: str, title: str) -> dict:
-            """根据 export_format 选择导出方式"""
+        def _export_one(md_content: str, title: str, doc_type: str = "doc") -> dict:
+            """根据 export_format 选择导出方式；doc_type 用于 Word/Excel 样式细分（doc | skill）。"""
             if export_format == "word":
-                return self._export_as_word(md_content, title, category=category)
+                return self._export_as_word(md_content, title, category=category, doc_type=doc_type)
             elif export_format == "excel":
-                return self._export_as_excel(task, title, category=category)
+                return self._export_as_excel(task, title, category=category, doc_type=doc_type)
             else:
                 return self.export_markdown(md_content, title, category=category)
 
@@ -683,17 +708,17 @@ th {{ background: #f5f5f5; font-weight: bold; }}
 
         if fmt == "both":
             md_doc, title_doc = self._build_doc_markdown(task)
-            results.append(_export_one(md_doc, title_doc))
+            results.append(_export_one(md_doc, title_doc, doc_type="doc"))
 
             md_skill, title_skill = self._build_skill_markdown(task)
-            results.append(_export_one(md_skill, title_skill))
+            results.append(_export_one(md_skill, title_skill, doc_type="skill"))
 
         elif fmt == "skill":
             md_content, title = self._build_skill_markdown(task)
-            results.append(_export_one(md_content, title))
+            results.append(_export_one(md_content, title, doc_type="skill"))
         else:
             md_content, title = self._build_doc_markdown(task)
-            results.append(_export_one(md_content, title))
+            results.append(_export_one(md_content, title, doc_type="doc"))
 
         # ── 额外导出源文件（完整原始文本，始终用 Google Doc 格式） ──
         raw_text = (result.get("extracted_text") or result.get("raw_text", ""))
@@ -710,10 +735,11 @@ th {{ background: #f5f5f5; font-weight: bold; }}
 
     def _export_as_word(
         self, md_content: str, title: str, category: str | None = None,
+        doc_type: str = "doc",
     ) -> dict:
         """
         将 Markdown 内容生成 .docx 文件并上传到 Google Drive。
-        使用 python-docx 库生成 Word 文档。
+        doc_type 为 skill 时使用 Skill 文档样式（标题更醒目、强调层级）。
         """
         from docx import Document
         from docx.shared import Pt, Inches, RGBColor
@@ -721,11 +747,12 @@ th {{ background: #f5f5f5; font-weight: bold; }}
 
         doc = Document()
 
-        # 设置默认字体
+        # 按文档类型细分样式：普通文档 11pt，Skill 文档 12pt 正文、标题加色
+        is_skill = doc_type == "skill"
         style = doc.styles["Normal"]
         font = style.font
         font.name = "Arial"
-        font.size = Pt(11)
+        font.size = Pt(12 if is_skill else 11)
 
         # 解析 Markdown 并写入 Word 文档
         lines = md_content.split("\n")
@@ -733,9 +760,13 @@ th {{ background: #f5f5f5; font-weight: bold; }}
             stripped = line.strip()
 
             if stripped.startswith("# "):
-                doc.add_heading(stripped[2:], level=1)
+                h = doc.add_heading(stripped[2:], level=1)
+                if is_skill and getattr(h, "runs", None) and len(h.runs) > 0:
+                    h.runs[0].font.color.rgb = RGBColor(0x1A, 0x73, 0xE8)
             elif stripped.startswith("## "):
-                doc.add_heading(stripped[3:], level=2)
+                h = doc.add_heading(stripped[3:], level=2)
+                if is_skill and getattr(h, "runs", None) and len(h.runs) > 0:
+                    h.runs[0].font.color.rgb = RGBColor(0x34, 0xA8, 0x53)
             elif stripped.startswith("### "):
                 doc.add_heading(stripped[4:], level=3)
             elif stripped.startswith("- "):
@@ -774,10 +805,11 @@ th {{ background: #f5f5f5; font-weight: bold; }}
 
     def _export_as_excel(
         self, task: dict, title: str, category: str | None = None,
+        doc_type: str = "doc",
     ) -> dict:
         """
         将任务结构化数据生成 .xlsx 文件并上传到 Google Drive。
-        使用 openpyxl 库生成 Excel 文档。
+        doc_type 为 skill 时使用 Skill 样式（蓝绿系表头、规则/步骤独立 Sheet）。
         """
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -785,6 +817,7 @@ th {{ background: #f5f5f5; font-weight: bold; }}
         result = task.get("result", {})
         ai = result.get("ai_result") or result.get("ai_analysis") or {}
         filename = task.get("filename", "未知文件")
+        is_skill = doc_type == "skill"
 
         wb = Workbook()
 
@@ -792,9 +825,13 @@ th {{ background: #f5f5f5; font-weight: bold; }}
         ws_summary = wb.active
         ws_summary.title = "摘要"
 
-        # 样式定义
+        # 样式定义：普通文档蓝表头，Skill 文档绿表头
         header_font = Font(bold=True, size=12, color="FFFFFF")
-        header_fill = PatternFill(start_color="4285F4", end_color="4285F4", fill_type="solid")
+        header_fill = PatternFill(
+            start_color="34A853" if is_skill else "4285F4",
+            end_color="34A853" if is_skill else "4285F4",
+            fill_type="solid",
+        )
         thin_border = Border(
             left=Side(style="thin"),
             right=Side(style="thin"),
@@ -879,6 +916,45 @@ th {{ background: #f5f5f5; font-weight: bold; }}
                     cell.alignment = Alignment(wrap_text=True, vertical="top")
             ws_struct.column_dimensions["A"].width = 25
             ws_struct.column_dimensions["B"].width = 80
+
+        # ── Skill 文档专属 Sheet：规则、实践步骤 ──
+        if is_skill:
+            rules = ai.get("rules", [])
+            if rules:
+                ws_rules = wb.create_sheet("规则")
+                ws_rules.append(["序号", "规则"])
+                for cell in ws_rules[1]:
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.border = thin_border
+                for i, r in enumerate(rules, 1):
+                    ws_rules.append([i, r])
+                    for cell in ws_rules[ws_rules.max_row]:
+                        cell.border = thin_border
+                        cell.alignment = Alignment(wrap_text=True, vertical="top")
+                ws_rules.column_dimensions["A"].width = 8
+                ws_rules.column_dimensions["B"].width = 80
+            steps = ai.get("steps", [])
+            if steps:
+                ws_steps = wb.create_sheet("实践步骤")
+                ws_steps.append(["序号", "标题", "要点"])
+                for cell in ws_steps[1]:
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.border = thin_border
+                for s in steps:
+                    row = [
+                        s.get("step_number", ""),
+                        s.get("title", ""),
+                        s.get("summary", ""),
+                    ]
+                    ws_steps.append(row)
+                    for cell in ws_steps[ws_steps.max_row]:
+                        cell.border = thin_border
+                        cell.alignment = Alignment(wrap_text=True, vertical="top")
+                ws_steps.column_dimensions["A"].width = 8
+                ws_steps.column_dimensions["B"].width = 25
+                ws_steps.column_dimensions["C"].width = 60
 
         # 保存到内存缓冲区
         buffer = io.BytesIO()

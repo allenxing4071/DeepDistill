@@ -48,6 +48,10 @@ httpx>=0.25.0
 # 视频平台下载（抖音/TikTok/B站/YouTube 等）
 yt-dlp>=2024.1.0
 
+# 网页动态渲染抓取（Binance 等需执行 JS 的站点，可选）
+# 安装后需执行: playwright install chromium
+playwright>=1.40.0
+
 # Google Docs 导出（Markdown -> HTML -> Google Doc）
 google-api-python-client>=2.100.0
 google-auth>=2.20.0

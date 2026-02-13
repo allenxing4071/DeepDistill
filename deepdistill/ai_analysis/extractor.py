@@ -1,7 +1,9 @@
 """
 AI 结构化提炼器
 将提取的文本通过 LLM 分析，输出结构化的知识摘要。
-Prompt 模板从 prompts/ 目录加载，模板名由配置 ai.prompt_template 指定（可与 KKline 一样按需扩展）。
+仅保留两个模板，避免为模板而增加模板：
+- summarize：所有内容提炼（教程/新闻/问答/会议/长文/Skill 等），输出统一 JSON，按内容类型酌情填可选字段；Skill 文档时通过 hint 要求补全 rules/steps/related。
+- style_analysis：分析风格（视觉/设计），intent=style 时使用。
 """
 
 from __future__ import annotations
@@ -44,6 +46,18 @@ def list_prompt_templates() -> list[dict]:
     return result
 
 
+def resolve_prompt_template(intent: str, doc_type: str) -> str:
+    """
+    按处理意图解析模板名。只保留两个模板：内容用 summarize，风格用 style_analysis。
+    content+skill 也用 summarize，通过 hint 要求补全 rules/steps/related。
+    """
+    from ..config import cfg
+    default_content = getattr(cfg, "AI_PROMPT_TEMPLATE", None) or "summarize"
+    if (intent or "content") == "style":
+        return "style_analysis"
+    return default_content
+
+
 def get_prompt_content(name: str) -> Optional[str]:
     """
     获取指定名称的 prompt 模板内容（名称不含 .txt）。
@@ -67,12 +81,33 @@ def get_prompt_content(name: str) -> Optional[str]:
     return path.read_text(encoding="utf-8")
 
 
-def extract_knowledge(text: str, video_analysis: dict | None = None) -> dict:
+def _is_likely_verification_or_empty_page(text: str) -> bool:
+    """判断是否为验证页/错误页/无正文页，避免对这类内容做无意义摘要。"""
+    if not text or len(text.strip()) < 200:
+        return True
+    lower = text.strip().lower()
+    verification_phrases = (
+        "enable javascript", "请启用 javascript", "javascript",
+        "robot verification", "人机验证", "验证失败", "请刷新",
+        "captcha", "cloudflare", "access denied", "checking your browser",
+    )
+    # 内容很短且包含典型验证/错误提示 → 视为无效页
+    if len(text) < 800:
+        for p in verification_phrases:
+            if p in lower:
+                return True
+    return False
+
+
+def extract_knowledge(
+    text: str,
+    video_analysis: dict | None = None,
+    template_name: str | None = None,
+    hint: str | None = None,
+) -> dict:
     """
     对提取的文本进行 AI 结构化提炼。
-    使用配置中的 ai.prompt_template 指定模板（默认 summarize）。
-    每次调用后上报 prompt_stats 供监控页展示。
-    返回：摘要、关键词、核心观点、结构分析。
+    模板仅两个：summarize（内容）、style_analysis（风格）。content+skill 用 summarize 并传 hint 要求补全 rules/steps/related。
     """
     import time
 
@@ -80,10 +115,23 @@ def extract_knowledge(text: str, video_analysis: dict | None = None) -> dict:
     from .llm_client import call_llm
     from .prompt_stats import prompt_stats
 
-    template_name = getattr(cfg, "AI_PROMPT_TEMPLATE", None) or "summarize"
+    # 预检：验证页/无正文页直接返回「抓取失败」，不调用 LLM，避免产出低质量摘要
+    if _is_likely_verification_or_empty_page(text):
+        logger.info("检测到验证页或无效正文，跳过 LLM 分析，返回抓取失败结构")
+        return {
+            "summary": "未能获取有效页面内容，源站可能要求验证或需执行 JavaScript，当前抓取未得到正文。",
+            "key_points": ["源站可能为动态加载或需人机验证，建议使用浏览器打开该 URL 查看"],
+            "keywords": ["抓取失败", "需验证", "动态页面"],
+            "structure": {"type": "fetch_failed", "sections": []},
+        }
+
+    if not template_name:
+        template_name = getattr(cfg, "AI_PROMPT_TEMPLATE", None) or "summarize"
     prompt_template = _load_prompt(template_name)
 
     user_prompt = prompt_template.replace("{{CONTENT}}", text[:8000])
+    if hint:
+        user_prompt = user_prompt.rstrip() + "\n\n" + hint.strip()
 
     if video_analysis and video_analysis.get("scenes"):
         video_desc = json.dumps(video_analysis, ensure_ascii=False, indent=2)

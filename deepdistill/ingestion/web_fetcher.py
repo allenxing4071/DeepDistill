@@ -2,6 +2,7 @@
 网页抓取模块
 从 URL 抓取网页内容，提取正文文本，保存为本地 HTML 文件供管线处理。
 支持：普通网页、文章页、博客等。
+动态站（如 Binance）：先用 httpx；若得到验证页则可用 fetch_url_with_browser 用无头浏览器渲染后再抓取。
 """
 
 from __future__ import annotations
@@ -12,6 +13,61 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 logger = logging.getLogger("deepdistill.ingestion.web_fetcher")
+
+
+def fetch_url_with_browser(url: str, save_dir: Path, wait_after_load_ms: int = 5000) -> Path:
+    """
+    使用无头浏览器渲染后抓取 URL，得到执行过 JS 的 HTML，适合 Binance 等动态站。
+    依赖：pip install playwright && playwright install chromium
+
+    Args:
+        url: 目标网页 URL
+        save_dir: 保存目录
+        wait_after_load_ms: 页面 load 后额外等待毫秒（便于 SPA 渲染）
+
+    Returns:
+        保存的 HTML 文件路径
+
+    Raises:
+        ValueError: URL 格式无效
+        RuntimeError: 抓取失败或未安装 playwright
+    """
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError(f"无效的 URL: {url}")
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"仅支持 http/https 协议: {url}")
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise RuntimeError(
+            "未安装 Playwright。请执行: pip install playwright && playwright install chromium"
+        )
+
+    logger.info(f"使用浏览器抓取网页: {url}")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.set_extra_http_headers({
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            })
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(wait_after_load_ms)
+            html_content = page.content()
+        finally:
+            browser.close()
+
+    filename = _url_to_filename(url)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    file_path = save_dir / filename
+    html_with_meta = _inject_source_meta(html_content, url)
+    file_path.write_text(html_with_meta, encoding="utf-8")
+
+    logger.info(f"浏览器抓取已保存: {file_path} ({len(html_content)} 字符)")
+    return file_path
 
 
 def fetch_url(url: str, save_dir: Path) -> Path:

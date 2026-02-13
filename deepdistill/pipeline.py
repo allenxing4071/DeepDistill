@@ -47,8 +47,9 @@ class ProcessingResult:
     # Layer 5.5: 视觉素材
     visual_assets: dict | None = None
 
-    # 处理意图
+    # 处理意图与文档类型（用于模板与导出样式细分）
     intent: str = "content"
+    doc_type: str = "doc"  # "doc" | "skill" | "both"
 
     # 元数据
     processing_time_sec: float = 0.0
@@ -70,6 +71,7 @@ class ProcessingResult:
             "visual_assets": self.visual_assets,
             "output_path": self.output_path,
             "intent": self.intent,
+            "doc_type": getattr(self, "doc_type", "doc"),
             "processing_time_sec": self.processing_time_sec,
             "created_at": self.created_at,
             "errors": self.errors,
@@ -95,11 +97,13 @@ class Pipeline:
         output_dir: Path | None = None,
         output_format: str | None = None,
         intent: str = "content",
+        doc_type: str = "doc",
         progress_callback: Optional[callable] = None,
     ):
         self.output_dir = output_dir or cfg.OUTPUT_DIR
         self.output_format = output_format or cfg.OUTPUT_FORMAT
         self.intent = intent  # "content" | "style"
+        self.doc_type = doc_type  # "doc" | "skill" | "both"（用于模板与导出样式细分）
         self._progress_cb = progress_callback  # 进度回调：(percent, step_label) -> None
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -137,6 +141,7 @@ class Pipeline:
             source_type=source_type,
             filename=file_path.name,
             intent=self.intent,
+            doc_type=getattr(self, "doc_type", "doc"),
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
@@ -243,16 +248,19 @@ class Pipeline:
         video_analysis: dict | None = None,
         image_style: dict | None = None,
     ) -> dict:
-        """Layer 4: AI 结构化提炼"""
-        from .ai_analysis.extractor import extract_knowledge
-        # 将 image_style 合并到 video_analysis 参数中传递
-        # （extractor 接受 video_analysis 作为附加上下文）
+        """Layer 4: AI 结构化提炼。仅两模板：summarize / style_analysis；Skill 文档用 summarize+hint。"""
+        from .ai_analysis.extractor import extract_knowledge, resolve_prompt_template
+        template_name = resolve_prompt_template(self.intent, getattr(self, "doc_type", "doc"))
+        doc_type = getattr(self, "doc_type", "doc")
+        hint = None
+        if self.intent == "content" and doc_type in ("skill", "both"):
+            hint = "本输出将用于 Skill 文档，请尽量补充 rules（规则/约束）、steps（实践步骤，每项含 step_number, title, summary）及 related（关联知识）。"
         style_context = video_analysis
         if image_style:
             style_context = image_style if not video_analysis else {
                 **video_analysis, "image_style": image_style
             }
-        return extract_knowledge(text, style_context)
+        return extract_knowledge(text, style_context, template_name=template_name, hint=hint)
 
     def _generate_output(self, result: ProcessingResult) -> str:
         """Layer 5: 生成输出文件"""
