@@ -42,6 +42,17 @@ export default function TaskList() {
     }
   }
 
+  const handleDelete = async (taskId: string) => {
+    try {
+      const res = await fetch(`${API_URL}/api/tasks/${taskId}`, { method: 'DELETE' })
+      if (res.ok) {
+        setTasks(prev => prev.filter(t => t.id !== taskId))
+      }
+    } catch {
+      // 静默
+    }
+  }
+
   useEffect(() => {
     fetchTasks()
     // 轮询刷新（有处理中的任务时）
@@ -73,15 +84,16 @@ export default function TaskList() {
 
       <div className="space-y-3">
         {tasks.map(task => (
-          <TaskCard key={task.id} task={task} />
+          <TaskCard key={task.id} task={task} onDelete={handleDelete} />
         ))}
       </div>
     </div>
   )
 }
 
-function TaskCard({ task }: { task: Task }) {
+function TaskCard({ task, onDelete }: { task: Task; onDelete: (id: string) => void }) {
   const config = STATUS_CONFIG[task.status] || STATUS_CONFIG.queued
+  const canDelete = task.status === 'completed' || task.status === 'failed'
 
   return (
     <div className="bg-surface-2 border border-white/[0.06] rounded-xl p-3 sm:p-5 hover:border-white/10 transition-colors animate-fade-in">
@@ -95,8 +107,19 @@ function TaskCard({ task }: { task: Task }) {
           </span>
         </div>
 
-        {/* 任务 ID */}
-        <span className="text-xs sm:text-sm text-text-tertiary font-mono shrink-0 hidden sm:inline">#{task.id}</span>
+        {/* 任务 ID + 删除按钮 */}
+        <div className="flex items-center gap-2 shrink-0">
+          <span className="text-xs sm:text-sm text-text-tertiary font-mono hidden sm:inline">#{task.id}</span>
+          {canDelete && (
+            <button
+              onClick={() => onDelete(task.id)}
+              className="text-xs px-2 py-1 rounded-md bg-error/10 text-error hover:bg-error/20 transition-colors"
+              title="删除任务"
+            >
+              删除
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 进度条 + 步骤文字 */}

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -118,6 +119,88 @@ class VideoCookieRequired(RuntimeError):
             f"文件名为 {platform.lower().replace('/', '_')}.txt\n"
             f"详细教程见 config/cookies/README.md"
         )
+
+
+# ─── 抖音辅助函数 ───
+
+def _can_resolve_host(url: str, timeout: float = 3.0) -> bool:
+    """快速检测 URL 中的域名是否可 DNS 解析（避免长时间等待不可达的 CDN）"""
+    try:
+        host = urlparse(url).netloc.split(":")[0]
+        socket.setdefaulttimeout(timeout)
+        socket.getaddrinfo(host, 443)
+        return True
+    except (socket.gaierror, socket.timeout, OSError):
+        return False
+    finally:
+        socket.setdefaulttimeout(None)
+
+
+def _collect_douyin_video_urls(video_obj: dict) -> list[str]:
+    """
+    从抖音视频对象中收集所有可用的 CDN URL（多来源汇总，去重）。
+    来源优先级：play_addr > download_addr > bit_rate
+    """
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    def _add_urls(url_list: list):
+        for u in url_list:
+            if isinstance(u, str) and u not in seen:
+                seen.add(u)
+                urls.append(u)
+
+    # 来源 1: play_addr.url_list（标准播放地址，通常 2-3 个 CDN）
+    play_addr = video_obj.get("play_addr", {})
+    _add_urls(play_addr.get("url_list", []))
+
+    # 来源 2: download_addr.url_list（下载专用地址，可能有不同 CDN）
+    download_addr = video_obj.get("download_addr", {})
+    _add_urls(download_addr.get("url_list", []))
+
+    # 来源 3: bit_rate 数组中的各码率版本
+    for br in video_obj.get("bit_rate", []):
+        if isinstance(br, dict):
+            pa = br.get("play_addr", {})
+            _add_urls(pa.get("url_list", []))
+
+    return urls
+
+
+def _try_download_video(candidate_urls: list[str], headers: dict,
+                        timeout: int = 120) -> http_requests.Response | None:
+    """
+    尝试从候选 URL 列表下载视频，DNS 不可达自动跳过，返回第一个成功的 Response。
+    对每个 URL 同时尝试无水印版本（playwm → play）。
+    """
+    for i, raw_url in enumerate(candidate_urls, 1):
+        # 生成无水印和原始两个版本
+        nowm_url = raw_url.replace("/playwm/", "/play/")
+        variants = [nowm_url] if nowm_url != raw_url else [raw_url]
+        if nowm_url != raw_url:
+            variants.append(raw_url)  # 无水印优先，原始 URL 兜底
+
+        for url in variants:
+            # DNS 预检：快速跳过不可解析的 CDN 域名
+            host = urlparse(url).netloc.split(":")[0]
+            if not _can_resolve_host(url):
+                logger.warning(f"CDN [{i}/{len(candidate_urls)}] DNS 不可达，跳过: {host}")
+                break  # 同一 CDN 的无水印/原始版本域名一样，跳过整组
+
+            try:
+                resp = http_requests.get(url, headers=headers, stream=True, timeout=timeout)
+                if resp.status_code == 200:
+                    logger.info(f"CDN [{i}/{len(candidate_urls)}] 下载成功: {host}")
+                    return resp
+                logger.warning(f"CDN [{i}/{len(candidate_urls)}] HTTP {resp.status_code}: {host}")
+            except http_requests.exceptions.ConnectionError as e:
+                logger.warning(f"CDN [{i}/{len(candidate_urls)}] 连接失败: {host} - {e}")
+            except http_requests.exceptions.Timeout:
+                logger.warning(f"CDN [{i}/{len(candidate_urls)}] 超时: {host}")
+            except Exception as e:
+                logger.warning(f"CDN [{i}/{len(candidate_urls)}] 异常: {host} - {e}")
+
+    return None
 
 
 # ─── 抖音专用下载器 ───
@@ -225,7 +308,7 @@ def _douyin_download(url: str, save_dir: Path) -> tuple[Path, dict]:
 
     # 从 _ROUTER_DATA 中定位视频详情
     # 路径: loaderData -> "video_(id)/page" -> videoInfoRes -> item_list[0]
-    video_url = None
+    candidate_urls: list[str] = []  # 收集所有候选 CDN URL
     title = ""
     duration = 0
 
@@ -248,27 +331,24 @@ def _douyin_download(url: str, save_dir: Path) -> tuple[Path, dict]:
                 if isinstance(duration, (int, float)) and duration > 1000:
                     duration = int(duration // 1000)  # 毫秒转秒
 
-                # 获取播放地址
-                play_addr = video_obj.get("play_addr", {})
-                url_list = play_addr.get("url_list", [])
-                if url_list:
-                    video_url = url_list[0]
+                # 收集所有候选 CDN URL（play_addr + download_addr + bit_rate）
+                candidate_urls = _collect_douyin_video_urls(video_obj)
     except (KeyError, IndexError, TypeError) as e:
         logger.warning(f"标准路径提取失败: {e}")
 
-    # 兜底：递归搜索
-    if not video_url:
+    # 兜底：递归搜索（同样收集所有 URL）
+    if not candidate_urls:
         def _recursive_find(obj, depth=0):
             if depth > 12:
-                return None, "", 0
+                return [], "", 0
             if isinstance(obj, dict):
                 if "desc" in obj and "video" in obj:
                     d = obj.get("desc", "")
                     v = obj["video"]
                     dur = v.get("duration", 0)
-                    pa = v.get("play_addr", {}).get("url_list", [])
-                    if pa:
-                        return pa[0], d, dur
+                    urls = _collect_douyin_video_urls(v)
+                    if urls:
+                        return urls, d, dur
                 for val in obj.values():
                     r = _recursive_find(val, depth + 1)
                     if r[0]:
@@ -278,13 +358,13 @@ def _douyin_download(url: str, save_dir: Path) -> tuple[Path, dict]:
                     r = _recursive_find(item, depth + 1)
                     if r[0]:
                         return r
-            return None, "", 0
+            return [], "", 0
 
-        video_url, title, duration = _recursive_find(router_data)
+        candidate_urls, title, duration = _recursive_find(router_data)
         if isinstance(duration, (int, float)) and duration > 1000:
             duration = int(duration // 1000)
 
-    if not video_url:
+    if not candidate_urls:
         raise RuntimeError(
             "抖音视频地址提取失败。可能原因：\n"
             "1. Cookie 已过期，请重新导出\n"
@@ -292,24 +372,32 @@ def _douyin_download(url: str, save_dir: Path) -> tuple[Path, dict]:
             "3. 抖音页面结构已更新"
         )
 
-    # Step 5: 转换为无水印 URL（playwm → play）
-    nowm_url = video_url.replace("/playwm/", "/play/")
-    logger.info(f"抖音视频: {title[:60]}（{duration}s），开始下载")
+    logger.info(
+        f"抖音视频: {title[:60]}（{duration}s），"
+        f"找到 {len(candidate_urls)} 个候选 CDN URL，开始逐个尝试下载"
+    )
 
-    # Step 6: 下载视频文件
+    # Step 5+6: 逐个尝试候选 URL 下载（含无水印转换 + DNS 预检）
     dl_headers = {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
                        "AppleWebKit/605.1.15",
         "Referer": "https://www.douyin.com/",
     }
 
-    dl_resp = http_requests.get(nowm_url, headers=dl_headers, stream=True, timeout=120)
-    if dl_resp.status_code != 200:
-        # 无水印失败，尝试原始 URL（带水印也能用于 ASR）
-        logger.warning(f"无水印 URL 失败({dl_resp.status_code})，尝试原始 URL")
-        dl_resp = http_requests.get(video_url, headers=dl_headers, stream=True, timeout=120)
-        if dl_resp.status_code != 200:
-            raise RuntimeError(f"抖音视频下载失败: HTTP {dl_resp.status_code}")
+    dl_resp = _try_download_video(candidate_urls, dl_headers, timeout=120)
+    if dl_resp is None:
+        # 列出所有尝试过的 CDN 域名，方便排查
+        tried_hosts = list(dict.fromkeys(
+            urlparse(u).netloc.split(":")[0] for u in candidate_urls
+        ))
+        raise RuntimeError(
+            f"抖音视频下载失败：所有 {len(candidate_urls)} 个 CDN URL 均不可用。\n"
+            f"尝试过的 CDN: {', '.join(tried_hosts)}\n"
+            "可能原因：\n"
+            "1. Cookie 已过期，CDN 链接已失效，请重新导出 Cookie\n"
+            "2. 网络环境无法访问抖音 CDN（如使用了代理/VPN）\n"
+            "3. 视频已被删除"
+        )
 
     file_path = save_dir / f"{video_id}.mp4"
     total = 0

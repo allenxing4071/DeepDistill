@@ -718,6 +718,19 @@ async def get_task(task_id: str):
 
 
 # ── 任务列表 ──
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: str):
+    """删除任务（仅允许删除已完成或失败的任务）"""
+    if task_id not in _tasks:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    task = _tasks[task_id]
+    if task["status"] in ("queued", "processing"):
+        raise HTTPException(status_code=400, detail="进行中的任务无法删除")
+    del _tasks[task_id]
+    logger.info(f"用户删除任务: {task_id}")
+    return {"ok": True, "task_id": task_id}
+
+
 @app.get("/api/tasks")
 async def list_tasks(limit: int = Query(20, ge=1, le=100)):
     tasks = sorted(_tasks.values(), key=lambda t: t["created_at"], reverse=True)

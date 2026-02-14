@@ -27,6 +27,15 @@ export async function uploadFile(file: File) {
   return res.json()
 }
 
+export async function deleteTask(taskId: string) {
+  const res = await fetch(`${API_URL}/api/tasks/${taskId}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || '删除失败')
+  }
+  return res.json()
+}
+
 export async function fetchConfig() {
   const res = await fetch(`${API_URL}/api/config`)
   return res.json()
